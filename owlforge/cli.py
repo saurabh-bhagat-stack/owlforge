@@ -1,8 +1,4 @@
-"""owlforge command-line interface (Phase 0 skeleton).
-
-Commands exist and the store works end-to-end; the agentic engine, sandbox, and
-report rendering are stubbed until later phases.
-"""
+"""owlforge command-line interface."""
 
 from __future__ import annotations
 
@@ -15,9 +11,13 @@ from rich.table import Table
 from sqlmodel import select
 
 from owlforge import __version__
-from owlforge.config import load_config, owlforge_home, write_default_config
+from owlforge.config import config_path, load_config, owlforge_home, write_default_config
+from owlforge.engine.agent import run_single_agent
+from owlforge.engine.events import Emitter
+from owlforge.llm.client import LLMError, make_client
 from owlforge.store.db import init_db, session
 from owlforge.store.models import Assessment, Finding
+from owlforge.tools.builtin import build_registry
 
 app = typer.Typer(
     add_completion=False,
@@ -65,38 +65,78 @@ def run(
     project: str = typer.Option("default", "--project", "-p", help="Project name."),
     mode: str = typer.Option("standard", "--mode", help="quick | standard | deep"),
     message: str = typer.Option(..., "--message", "-m", help="Plain-language assessment instructions."),
+    max_turns: int = typer.Option(20, "--max-turns", help="Max agent turns."),
 ) -> None:
-    """Start an assessment. (Phase 0: records it; the engine lands in Phase 1.)"""
+    """Start an assessment and run the Phase 1 single-agent loop against a local model."""
+    import asyncio
+
     cfg = load_config()
     target = target or cfg.testing.default_target
     init_db()
-    eid = _new_id("asmt")
+
+    try:
+        client = make_client(cfg)
+    except LLMError as e:
+        console.print(f"[red]{e}[/]")
+        console.print(
+            f"[dim]Edit {config_path()} and set a model your local server at "
+            f"{cfg.llm.base_url} actually serves, then re-run.[/]"
+        )
+        raise typer.Exit(1) from None
+
+    aid = _new_id("asmt")
     with session() as s:
         s.add(
             Assessment(
-                id=eid,
-                project_name=project,
-                target=target,
-                instructions=message,
-                scan_mode=mode,
-                status="created",
+                id=aid, project_name=project, target=target,
+                instructions=message, scan_mode=mode, status="executing",
             )
         )
         s.commit()
+
     console.print(
         Panel.fit(
-            f"id:      [bold cyan]{eid}[/]\n"
+            f"id:      [bold cyan]{aid}[/]\n"
             f"project: {project}\n"
             f"target:  {target}\n"
-            f"mode:    {mode}\n"
-            f"status:  created",
-            title="assessment created",
+            f"model:   {cfg.llm.model} @ {cfg.llm.base_url}\n"
+            f"mode:    {mode}",
+            title="assessment started",
             border_style="cyan",
         )
     )
+
+    emit = Emitter(aid, console=console)
+    registry = build_registry()
+    status = "completed"
+    summary = ""
+    try:
+        summary = asyncio.run(
+            run_single_agent(
+                client=client, registry=registry, emit=emit, assessment_id=aid,
+                target=target, instructions=message, scan_mode=mode, max_turns=max_turns,
+            )
+        )
+    except KeyboardInterrupt:
+        status = "stopped"
+        console.print("[yellow]interrupted[/]")
+    except Exception as e:
+        status = "failed"
+        emit("error", f"{type(e).__name__}: {e}")
+
+    with session() as s:
+        a = s.get(Assessment, aid)
+        if a:
+            a.status = status
+            s.add(a)
+            s.commit()
+
     console.print(
-        "[yellow]Engine not implemented yet (Phase 1).[/] The assessment is recorded; "
-        "nothing is executed against the target."
+        Panel.fit(
+            summary or "(no summary)",
+            title=f"assessment {status}",
+            border_style="green" if status == "completed" else "red",
+        )
     )
 
 
@@ -107,13 +147,14 @@ def assessments_list() -> None:
     with session() as s:
         rows = s.exec(select(Assessment).order_by(Assessment.created_at.desc())).all()
     if not rows:
-        console.print("[dim]No assessments yet. Start one with `owlforge run -m \"...\"`.[/]")
+        console.print('[dim]No assessments yet. Start one with `owlforge run -m "..."`.[/]')
         return
     table = Table(title="assessments")
     for col in ("id", "project", "target", "mode", "status", "created"):
         table.add_column(col)
-    for e in rows:
-        table.add_row(e.id, e.project_name, e.target, e.scan_mode, e.status, e.created_at.isoformat(timespec="seconds"))
+    for a in rows:
+        table.add_row(a.id, a.project_name, a.target, a.scan_mode, a.status,
+                      a.created_at.isoformat(timespec="seconds"))
     console.print(table)
 
 
@@ -122,11 +163,11 @@ def assessments_show(assessment_id: str) -> None:
     """Show one assessment."""
     init_db()
     with session() as s:
-        e = s.get(Assessment, assessment_id)
-    if not e:
+        a = s.get(Assessment, assessment_id)
+    if not a:
         console.print(f"[red]No assessment {assessment_id}[/]")
         raise typer.Exit(1)
-    console.print(e.model_dump())
+    console.print(a.model_dump())
 
 
 @app.command()
@@ -136,7 +177,7 @@ def findings(assessment_id: str) -> None:
     with session() as s:
         rows = s.exec(select(Finding).where(Finding.assessment_id == assessment_id)).all()
     if not rows:
-        console.print("[dim]No findings (nothing runs until Phase 3).[/]")
+        console.print("[dim]No findings (finding-filing lands in Phase 3).[/]")
         return
     table = Table(title=f"findings — {assessment_id}")
     for col in ("id", "severity", "status", "title"):

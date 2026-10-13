@@ -1,0 +1,78 @@
+"""Single-agent think -> act -> observe loop (Phase 1)."""
+
+from __future__ import annotations
+
+from owlforge.engine.events import Emitter
+from owlforge.engine.prompts import system_prompt
+from owlforge.llm.base import LLMClient, Message
+from owlforge.tools.base import ToolContext, ToolRegistry
+
+_MAX_TOOL_RESULT = 8000
+
+
+async def run_single_agent(
+    *,
+    client: LLMClient,
+    registry: ToolRegistry,
+    emit: Emitter,
+    assessment_id: str,
+    target: str,
+    instructions: str,
+    scan_mode: str,
+    max_turns: int = 20,
+) -> str:
+    ctx = ToolContext(assessment_id=assessment_id, target=target, emit=emit)
+    messages: list[Message] = [
+        Message(role="system", content=system_prompt(target, instructions, scan_mode)),
+        Message(role="user", content=f"Assess {target}. {instructions}"),
+    ]
+    specs = registry.specs()
+    last_summary = "No summary produced."
+    idle_nudges = 0
+
+    for turn in range(1, max_turns + 1):
+        emit("status", f"turn {turn}/{max_turns}")
+        turn_result = client.chat(messages, specs, temperature=0.2, max_tokens=1024)
+
+        if turn_result.content and turn_result.content.strip():
+            emit("assistant", turn_result.content.strip()[:500])
+
+        if not turn_result.tool_calls:
+            idle_nudges += 1
+            if idle_nudges >= 2:
+                emit("log", "no tool call twice; ending loop")
+                break
+            messages.append(Message(role="assistant", content=turn_result.content or ""))
+            messages.append(Message(role="user", content=(
+                "You did not call a tool. Call `think`, `http_fetch`, `note`, or `finish`.")))
+            continue
+        idle_nudges = 0
+
+        # record the assistant turn (with its tool calls) before the tool results
+        messages.append(Message(role="assistant", content=turn_result.content or "", tool_calls=turn_result.tool_calls))
+
+        lifecycle = False
+        for call in turn_result.tool_calls:
+            tool = registry.get(call.name)
+            if not tool:
+                messages.append(Message(role="tool", tool_call_id=call.id, name=call.name,
+                                        content=f"Unknown tool {call.name}."))
+                continue
+            try:
+                result = await tool.run(call.arguments, ctx)
+            except Exception as e:  # a tool crash must not kill the loop
+                result = f"tool error: {type(e).__name__}: {e}"
+            if tool.name not in {"think", "finish"}:
+                emit("tool_result", f"{tool.name} -> {result[:200]}")
+            messages.append(Message(role="tool", tool_call_id=call.id, name=call.name,
+                                    content=result[:_MAX_TOOL_RESULT]))
+            if tool.lifecycle:
+                lifecycle = True
+                last_summary = str(call.arguments.get("summary", last_summary))
+
+        if lifecycle:
+            emit("status", "assessment finished by agent")
+            return last_summary
+
+    emit("status", "max turns reached")
+    return last_summary

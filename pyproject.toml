@@ -13,13 +13,16 @@ authors = [{ name = "saurabh-bhagat-stack" }]
 keywords = ["pentest", "security", "agent", "llm", "local-first", "autonomous"]
 
 # Phase 0 core deps — kept minimal so `pip install -e .` is fast and reliable.
-# Phase 1 will add: litellm, instructor, httpx, tiktoken.
+# Phase 1 added: openai (OpenAI-compatible transport), httpx. Later: instructor, tiktoken.
+# (Our LLMClient interface keeps a LiteLLM-backed impl a drop-in for hosted multi-provider.)
 # Phase 2 (sandbox daemon) deps live in sandbox/agentd/requirements.txt (run in the container).
 dependencies = [
     "typer>=0.12",
     "rich>=13.7",
     "pydantic>=2.5",
     "sqlmodel>=0.0.16",
+    "openai>=1.40",
+    "httpx>=0.27",
     "platformdirs>=4.2",
 ]
 

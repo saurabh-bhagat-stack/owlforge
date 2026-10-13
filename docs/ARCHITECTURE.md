@@ -59,8 +59,9 @@ our own architecture. We do not fork or vendor their code.
 ### 3.1 LLM layer — the local-first differentiator
 This is where the legacy code was weakest and where we win.
 
-- **Gateway:** LiteLLM to speak to any OpenAI-compatible endpoint uniformly
-  (local or hosted), configured per-model.
+- **Gateway:** an LLMClient interface with a default OpenAI-compatible impl (via the
+  `openai` SDK) that covers every local server. A LiteLLM-backed impl can drop in
+  behind the same interface later for hosted multi-provider use. [Implemented, Phase 1.]
 - **Tool-calling with fallback:** try the server's *native* function-calling first; if
   the model/server doesn't support it reliably (common for local llama.cpp/Ollama),
   fall back to a **strict text tool-call protocol** (a documented JSON block in the

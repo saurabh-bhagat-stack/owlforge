@@ -42,9 +42,11 @@ def test_init_and_run_use_isolated_home(tmp_path, monkeypatch):
     assert runner.invoke(cli.app, ["init"]).exit_code == 0
     assert (tmp_path / "owlforge.db").exists()
 
+    # No model configured -> `run` degrades gracefully (exit 1 + guidance), no crash.
     r = runner.invoke(cli.app, ["run", "-m", "smoke test", "--project", "t"])
-    assert r.exit_code == 0
+    assert r.exit_code == 1
+    assert "model" in r.stdout.lower()
 
+    # Listing with no assessments is fine.
     r = runner.invoke(cli.app, ["assessments", "list"])
     assert r.exit_code == 0
-    assert "asmt_" in r.stdout
