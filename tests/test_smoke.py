@@ -45,6 +45,6 @@ def test_init_and_run_use_isolated_home(tmp_path, monkeypatch):
     r = runner.invoke(cli.app, ["run", "-m", "smoke test", "--project", "t"])
     assert r.exit_code == 0
 
-    r = runner.invoke(cli.app, ["engagements", "list"])
+    r = runner.invoke(cli.app, ["assessments", "list"])
     assert r.exit_code == 0
-    assert "eng_" in r.stdout
+    assert "asmt_" in r.stdout

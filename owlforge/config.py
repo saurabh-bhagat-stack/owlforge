@@ -2,7 +2,7 @@
 
 Loads from ``$OWLFORGE_HOME/config.toml`` (default ``~/.owlforge``). Falls back to
 sane local-first defaults so the tool runs out of the box. The same directory holds
-the SQLite store and per-engagement workspaces.
+the SQLite store and per-assessment workspaces.
 """
 
 from __future__ import annotations
@@ -62,8 +62,8 @@ def db_path() -> Path:
     return owlforge_home() / "owlforge.db"
 
 
-def engagements_dir() -> Path:
-    return owlforge_home() / "engagements"
+def assessments_dir() -> Path:
+    return owlforge_home() / "assessments"
 
 
 @lru_cache(maxsize=1)
@@ -104,7 +104,7 @@ default_target = "https://ginandjuice.shop/"
 def write_default_config(force: bool = False) -> Path:
     home = owlforge_home()
     home.mkdir(parents=True, exist_ok=True)
-    engagements_dir().mkdir(parents=True, exist_ok=True)
+    assessments_dir().mkdir(parents=True, exist_ok=True)
     path = config_path()
     if path.exists() and not force:
         return path

@@ -1,6 +1,6 @@
 """SQLModel tables for the owlforge store.
 
-Core domain, Phase 0: Engagement, Agent, Event, Finding, Report. JSON-ish fields are
+Core domain, Phase 0: Assessment, Agent, Event, Finding, Report. JSON-ish fields are
 stored as JSON columns. Project memory + tool-call tables arrive in later phases.
 """
 
@@ -19,7 +19,7 @@ def _now() -> datetime:
 # Status / enum values are kept as plain strings (validated at the edges) so the
 # schema stays flexible while the state machine is still settling.
 
-class Engagement(SQLModel, table=True):
+class Assessment(SQLModel, table=True):
     """One scoped, autonomous assessment run against a target."""
 
     id: str = Field(primary_key=True)
@@ -39,7 +39,7 @@ class Engagement(SQLModel, table=True):
 
 class Agent(SQLModel, table=True):
     id: str = Field(primary_key=True)
-    engagement_id: str = Field(index=True)
+    assessment_id: str = Field(index=True)
     parent_id: str | None = None
     name: str = ""
     task: str = ""
@@ -51,7 +51,7 @@ class Agent(SQLModel, table=True):
 
 class Event(SQLModel, table=True):
     id: str = Field(primary_key=True)
-    engagement_id: str = Field(index=True)
+    assessment_id: str = Field(index=True)
     agent_id: str | None = None
     type: str = "log"
     message: str = ""
@@ -61,7 +61,7 @@ class Event(SQLModel, table=True):
 
 class Finding(SQLModel, table=True):
     id: str = Field(primary_key=True)
-    engagement_id: str = Field(index=True)
+    assessment_id: str = Field(index=True)
     title: str
     severity: str = "medium"   # critical|high|medium|low|info
     status: str = "candidate"  # candidate|validated|false_positive|accepted_risk|reported
@@ -80,7 +80,7 @@ class Finding(SQLModel, table=True):
 
 
 class Report(SQLModel, table=True):
-    engagement_id: str = Field(primary_key=True)
+    assessment_id: str = Field(primary_key=True)
     status: str = "pending"
     executive_summary: str = ""
     risk_rating: str = ""

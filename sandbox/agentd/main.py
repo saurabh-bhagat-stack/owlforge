@@ -1,7 +1,7 @@
 """owlforge-agentd — minimal Phase 0 daemon.
 
 Exposes /health so the engine can gate on readiness. Phase 2 adds /exec (with a
-streaming channel), /files, and /proxy, all behind a per-engagement bearer token.
+streaming channel), /files, and /proxy, all behind a per-assessment bearer token.
 """
 
 from __future__ import annotations

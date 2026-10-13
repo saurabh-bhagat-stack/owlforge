@@ -17,16 +17,16 @@ from sqlmodel import select
 from owlforge import __version__
 from owlforge.config import load_config, owlforge_home, write_default_config
 from owlforge.store.db import init_db, session
-from owlforge.store.models import Engagement, Finding
+from owlforge.store.models import Assessment, Finding
 
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
     help="owlforge — local-first autonomous agentic pentest platform.",
 )
-engagements_app = typer.Typer(no_args_is_help=True, help="Inspect engagements.")
+assessments_app = typer.Typer(no_args_is_help=True, help="Inspect assessments.")
 sandbox_app = typer.Typer(no_args_is_help=True, help="Manage the sandbox image.")
-app.add_typer(engagements_app, name="engagements")
+app.add_typer(assessments_app, name="assessments")
 app.add_typer(sandbox_app, name="sandbox")
 
 console = Console()
@@ -64,16 +64,16 @@ def run(
     target: str = typer.Option(None, "--target", "-t", help="Target URL/host (defaults to testing target)."),
     project: str = typer.Option("default", "--project", "-p", help="Project name."),
     mode: str = typer.Option("standard", "--mode", help="quick | standard | deep"),
-    message: str = typer.Option(..., "--message", "-m", help="Plain-language engagement instructions."),
+    message: str = typer.Option(..., "--message", "-m", help="Plain-language assessment instructions."),
 ) -> None:
-    """Start an engagement. (Phase 0: records it; the engine lands in Phase 1.)"""
+    """Start an assessment. (Phase 0: records it; the engine lands in Phase 1.)"""
     cfg = load_config()
     target = target or cfg.testing.default_target
     init_db()
-    eid = _new_id("eng")
+    eid = _new_id("asmt")
     with session() as s:
         s.add(
-            Engagement(
+            Assessment(
                 id=eid,
                 project_name=project,
                 target=target,
@@ -90,26 +90,26 @@ def run(
             f"target:  {target}\n"
             f"mode:    {mode}\n"
             f"status:  created",
-            title="engagement created",
+            title="assessment created",
             border_style="cyan",
         )
     )
     console.print(
-        "[yellow]Engine not implemented yet (Phase 1).[/] The engagement is recorded; "
+        "[yellow]Engine not implemented yet (Phase 1).[/] The assessment is recorded; "
         "nothing is executed against the target."
     )
 
 
-@engagements_app.command("list")
-def engagements_list() -> None:
-    """List recorded engagements."""
+@assessments_app.command("list")
+def assessments_list() -> None:
+    """List recorded assessments."""
     init_db()
     with session() as s:
-        rows = s.exec(select(Engagement).order_by(Engagement.created_at.desc())).all()
+        rows = s.exec(select(Assessment).order_by(Assessment.created_at.desc())).all()
     if not rows:
-        console.print("[dim]No engagements yet. Start one with `owlforge run -m \"...\"`.[/]")
+        console.print("[dim]No assessments yet. Start one with `owlforge run -m \"...\"`.[/]")
         return
-    table = Table(title="engagements")
+    table = Table(title="assessments")
     for col in ("id", "project", "target", "mode", "status", "created"):
         table.add_column(col)
     for e in rows:
@@ -117,28 +117,28 @@ def engagements_list() -> None:
     console.print(table)
 
 
-@engagements_app.command("show")
-def engagements_show(engagement_id: str) -> None:
-    """Show one engagement."""
+@assessments_app.command("show")
+def assessments_show(assessment_id: str) -> None:
+    """Show one assessment."""
     init_db()
     with session() as s:
-        e = s.get(Engagement, engagement_id)
+        e = s.get(Assessment, assessment_id)
     if not e:
-        console.print(f"[red]No engagement {engagement_id}[/]")
+        console.print(f"[red]No assessment {assessment_id}[/]")
         raise typer.Exit(1)
     console.print(e.model_dump())
 
 
 @app.command()
-def findings(engagement_id: str) -> None:
-    """List findings for an engagement."""
+def findings(assessment_id: str) -> None:
+    """List findings for an assessment."""
     init_db()
     with session() as s:
-        rows = s.exec(select(Finding).where(Finding.engagement_id == engagement_id)).all()
+        rows = s.exec(select(Finding).where(Finding.assessment_id == assessment_id)).all()
     if not rows:
         console.print("[dim]No findings (nothing runs until Phase 3).[/]")
         return
-    table = Table(title=f"findings — {engagement_id}")
+    table = Table(title=f"findings — {assessment_id}")
     for col in ("id", "severity", "status", "title"):
         table.add_column(col)
     for f in rows:
@@ -147,8 +147,8 @@ def findings(engagement_id: str) -> None:
 
 
 @app.command()
-def report(engagement_id: str) -> None:
-    """Render an engagement report. (Phase 3.)"""
+def report(assessment_id: str) -> None:
+    """Render an assessment report. (Phase 3.)"""
     console.print("[yellow]Reporting lands in Phase 3.[/]")
 
 
