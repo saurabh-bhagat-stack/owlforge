@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "owlforge"
+version = "0.0.1"
+description = "Local-first autonomous agentic penetration-testing platform"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "saurabh-bhagat-stack" }]
+keywords = ["pentest", "security", "agent", "llm", "local-first", "autonomous"]
+
+# Phase 0 core deps — kept minimal so `pip install -e .` is fast and reliable.
+# Phase 1 will add: litellm, instructor, httpx, tiktoken.
+# Phase 2 (sandbox daemon) deps live in sandbox/agentd/requirements.txt (run in the container).
+dependencies = [
+    "typer>=0.12",
+    "rich>=13.7",
+    "pydantic>=2.5",
+    "sqlmodel>=0.0.16",
+    "platformdirs>=4.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.5",
+    "pytest>=8.0",
+    "mypy>=1.10",
+]
+
+[project.scripts]
+owlforge = "owlforge.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["owlforge"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
