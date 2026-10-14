@@ -24,6 +24,25 @@ async def _note(args: dict[str, Any], ctx: ToolContext) -> str:
     return f"Note saved: {title}"
 
 
+def _normalize_params(params):
+    """Models sometimes pre-URL-encode payloads in params (e.g. "%27"); httpx would
+    then encode the '%' again (-> "%2527"), corrupting the payload and causing false
+    negatives. If a value already looks percent-encoded, decode it once so it hits the
+    wire correctly whether the model passed a raw quote or a pre-encoded one."""
+    import re
+    from urllib.parse import unquote
+
+    if not isinstance(params, dict):
+        return params
+    out = {}
+    for k, v in params.items():
+        if isinstance(v, str) and re.search(r"%[0-9A-Fa-f]{2}", v):
+            out[k] = unquote(v)
+        else:
+            out[k] = v
+    return out
+
+
 async def _http_request(args: dict[str, Any], ctx: ToolContext) -> str:
     method = str(args.get("method", "GET")).upper()
     url = str(args.get("url", "")).strip()
@@ -32,7 +51,7 @@ async def _http_request(args: dict[str, Any], ctx: ToolContext) -> str:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     headers = args.get("headers") or None
-    params = args.get("params") or None
+    params = _normalize_params(args.get("params") or None)
     body = args.get("body")
     ctx.emit("tool_call", f"http_request {method} {url}")
     if ctx.sandbox is not None:

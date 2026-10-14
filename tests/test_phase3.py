@@ -113,3 +113,14 @@ def test_validation_rejects_html_encoded_only_reflection(isolated):
     assert counts["rejected"] == 1 and counts["validated"] == 0
     with isolated.session() as s:
         assert s.get(Finding, fid).status == "false_positive"
+
+
+def test_normalize_params_prevents_double_encoding():
+    from owlforge.tools.builtin import _normalize_params
+
+    # pre-encoded payload gets decoded once (so httpx encodes exactly once on the wire)
+    assert _normalize_params({"category": "Accessories%27"}) == {"category": "Accessories'"}
+    # raw payload is left as-is
+    assert _normalize_params({"category": "Accessories'"}) == {"category": "Accessories'"}
+    # plain values untouched
+    assert _normalize_params({"q": "plain"}) == {"q": "plain"}
