@@ -20,7 +20,7 @@ from owlforge.config import (
 )
 from owlforge.engine.agent import run_single_agent
 from owlforge.engine.events import Emitter
-from owlforge.llm.client import LLMError, make_client
+from owlforge.llm.client import LLMError, free_other_ollama_models, make_client
 from owlforge.sandbox import manager
 from owlforge.store.db import init_db, session
 from owlforge.store.models import Assessment, Finding
@@ -85,6 +85,10 @@ def run(
         cfg.llm.model = model
     target = target or cfg.testing.default_target
     init_db()
+
+    if cfg.llm.free_other_models:
+        free_other_ollama_models(cfg.llm.base_url, cfg.llm.model,
+                                 log=lambda m: console.print(f"[dim][offload] {m}[/]"))
 
     try:
         client = make_client(cfg)

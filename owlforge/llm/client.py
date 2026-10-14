@@ -245,3 +245,27 @@ def make_client(cfg) -> OpenAICompatClient:
     )
     client.context_source = source
     return client
+
+
+def free_other_ollama_models(base_url: str, keep_model: str, log=lambda m: None) -> None:
+    """Offload every currently-loaded Ollama model except ``keep_model`` (keep_alive=0).
+
+    Best-effort and provider-agnostic: if the endpoint isn't Ollama (no /api/ps) this
+    simply no-ops. Useful on limited RAM and when benchmarking one model at a time.
+    """
+    import httpx
+
+    root = _ollama_root(base_url)
+    try:
+        resp = httpx.get(f"{root}/api/ps", timeout=5.0)
+        loaded = [m.get("name", "") for m in resp.json().get("models", [])]
+    except Exception:
+        return
+    for name in loaded:
+        if not name or name == keep_model:
+            continue
+        try:
+            httpx.post(f"{root}/api/generate", json={"model": name, "keep_alive": 0}, timeout=10.0)
+            log(f"offloaded {name}")
+        except Exception:
+            pass
