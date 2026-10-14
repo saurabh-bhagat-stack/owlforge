@@ -31,7 +31,9 @@ async def run_single_agent(
     specs = registry.specs()
     last_summary = ""
     notes: list[str] = []
+    actions: list[str] = []
     idle_nudges = 0
+    wrapup_sent = False
 
     for turn in range(1, max_turns + 1):
         emit("status", f"turn {turn}/{max_turns}")
@@ -71,13 +73,24 @@ async def run_single_agent(
                                     content=result[:_MAX_TOOL_RESULT]))
             if call.name == "note":
                 notes.append(str(call.arguments.get("content") or call.arguments.get("title") or "").strip())
+            elif call.name not in {"think", "finish"}:
+                _arg = str(call.arguments.get("command") or call.arguments.get("url")
+                           or call.arguments.get("query") or "").strip()
+                actions.append(f"{call.name}: {_arg[:100]}" if _arg else call.name)
             if tool.lifecycle:
                 lifecycle = True
                 last_summary = str(call.arguments.get("summary", "")).strip()
 
         if lifecycle:
             emit("status", "assessment finished by agent")
-            return _finalize(last_summary, notes, emit)
+            return _finalize(last_summary, notes, actions, emit)
+
+        if turn >= max_turns - 2 and not wrapup_sent:
+            wrapup_sent = True
+            emit("log", "turn budget low — nudging agent to record findings and finish")
+            messages.append(Message(role="user", content=(
+                "You are almost out of turns. Stop probing now. Call `note` once per concrete "
+                "finding you have evidence for, then call `finish` with a summary.")))
 
     emit("status", "max turns reached — requesting final summary")
     try:
@@ -89,15 +102,19 @@ async def run_single_agent(
             last_summary = final.content.strip()
     except Exception as e:  # summary is best-effort
         emit("log", f"summary generation failed: {type(e).__name__}: {e}")
-    return _finalize(last_summary, notes, emit)
+    return _finalize(last_summary, notes, actions, emit)
 
 
-def _finalize(summary: str, notes: list[str], emit: Emitter) -> str:
-    """Always yield a usable summary: the model's, else a digest of the notes it took."""
+def _finalize(summary: str, notes: list[str], actions: list[str], emit: Emitter) -> str:
+    """Always yield a usable summary: the model's, else a digest of its notes,
+    else a digest of the actions it actually took (so a run is never empty)."""
     summary = (summary or "").strip()
     if not summary and notes:
         kept = [n for n in notes if n]
         summary = "Summary assembled from recorded notes:\n- " + "\n- ".join(kept)
-    summary = summary or "No summary produced (the agent recorded no notes)."
-    emit("finish", summary[:1000])
+    if not summary and actions:
+        summary = ("No explicit summary or notes were recorded. Actions taken:\n- "
+                   + "\n- ".join(actions[-25:]))
+    summary = summary or "No summary produced (the agent took no actions)."
+    emit("finish", summary[:2000])
     return summary

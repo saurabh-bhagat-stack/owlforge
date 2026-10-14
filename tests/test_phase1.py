@@ -190,3 +190,30 @@ def test_summary_falls_back_to_notes():
         )
     )
     assert "port 443 open" in summary
+
+
+class _ProbeNoSummaryClient:
+    """Keeps probing (never notes/finishes), returns empty on the summarize call."""
+
+    def chat(self, messages, tools=None, *, temperature=None, max_tokens=None) -> AssistantTurn:
+        if not tools:
+            return AssistantTurn(content="")
+        return AssistantTurn(content="probing",
+                             tool_calls=[ToolCall(id="p", name="exec_command",
+                                                  arguments={"command": "httpx -u https://x"})])
+
+
+def test_summary_falls_back_to_actions():
+    async def _exec(args, ctx):
+        return "exit=0"
+
+    reg = ToolRegistry()
+    reg.add(Tool(name="exec_command", description="e", parameters={"type": "object", "properties": {}}, run=_exec))
+    summary = asyncio.run(
+        run_single_agent(
+            client=_ProbeNoSummaryClient(), registry=reg, emit=Emitter("asmt_af", persist=False),
+            assessment_id="asmt_af", target="https://example.test", instructions="x",
+            scan_mode="quick", max_turns=3,
+        )
+    )
+    assert "Actions taken" in summary and "httpx" in summary
