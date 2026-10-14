@@ -131,3 +131,40 @@ def proxy_flows(limit: int = Query(100)) -> dict:
     except FileNotFoundError:
         pass
     return {"flows": flows, "count": len(flows)}
+
+
+class HttpRequest(BaseModel):
+    method: str = "GET"
+    url: str
+    headers: dict[str, str] | None = None
+    params: dict[str, str] | None = None
+    body: str | None = None
+    follow_redirects: bool = True
+    timeout_ms: int = 30_000
+
+
+@app.post("/http", dependencies=[Depends(auth)])
+def http_request(req: HttpRequest) -> dict:
+    """Issue an HTTP request from inside the sandbox (through mitmproxy, captured).
+
+    Structured params mean no shell quoting — injection payloads go in `params`/`body`
+    safely. Uses the system CA bundle so mitmproxy's intercepting cert is trusted."""
+    import httpx
+
+    ca = "/etc/ssl/certs/ca-certificates.crt"
+    verify = ca if os.path.exists(ca) else True
+    try:
+        with httpx.Client(verify=verify, trust_env=True,
+                          follow_redirects=req.follow_redirects,
+                          timeout=max(1, req.timeout_ms) / 1000) as c:
+            r = c.request(req.method.upper(), req.url, headers=req.headers,
+                          params=req.params, content=req.body)
+        return {
+            "status": r.status_code,
+            "final_url": str(r.url),
+            "headers": dict(r.headers),
+            "body": r.text[:MAX_OUTPUT],
+            "elapsed_ms": int(r.elapsed.total_seconds() * 1000),
+        }
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}

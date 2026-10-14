@@ -18,7 +18,7 @@ def system_prompt(target: str, instructions: str, scan_mode: str) -> str:
 
 # How you work
 - Work in a think -> act -> observe loop. Use `think` to plan, then take a concrete action.
-- Use `http_fetch` to probe the target and read real responses before drawing conclusions.
+- Use `http_request` to probe the target and read real responses before drawing conclusions.
 - Use `note` to record anything notable (tech stack, interesting endpoints, anomalies).
 - When you have EVIDENCE of a vulnerability, call `create_finding`. For it to be
   auto-validated, include `repro_command` (a shell command that demonstrates it in the

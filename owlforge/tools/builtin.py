@@ -1,8 +1,8 @@
 """Phase 1 tools. Enough to prove the loop does something real against a target.
 
-NOTE: http_fetch runs ENGINE-SIDE (host) for now. In Phase 2 all target-touching
-execution moves into the sandbox over the agentd RPC; this host-side fetch is a
-temporary stand-in so Phase 1 can demonstrate observe->act with a live model.
+NOTE: http_request uses the sandbox agentd (captured by mitmproxy) when a sandbox is
+up, else a host-side httpx fallback. Structured params/body mean injection payloads
+never touch a shell. exec_command remains for non-HTTP tools (nmap, dig, etc.).
 """
 
 from __future__ import annotations
@@ -24,27 +24,41 @@ async def _note(args: dict[str, Any], ctx: ToolContext) -> str:
     return f"Note saved: {title}"
 
 
-async def _http_fetch(args: dict[str, Any], ctx: ToolContext) -> str:
-    import httpx
-
-    url = str(args.get("url", "")).strip()
+async def _http_request(args: dict[str, Any], ctx: ToolContext) -> str:
     method = str(args.get("method", "GET")).upper()
+    url = str(args.get("url", "")).strip()
     if not url:
         return "error: 'url' is required"
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
-    ctx.emit("tool_call", f"http_fetch {method} {url}")
-    try:
-        async with httpx.AsyncClient(follow_redirects=True, timeout=20.0) as client:
-            r = await client.request(method, url)
-            body = r.text[:2000]
-            hdrs = {k: v for k, v in list(r.headers.items())[:15]}
-            return (
-                f"status={r.status_code}\nfinal_url={r.url}\nheaders={hdrs}\n"
-                f"body[:2000]:\n{body}"
+    headers = args.get("headers") or None
+    params = args.get("params") or None
+    body = args.get("body")
+    ctx.emit("tool_call", f"http_request {method} {url}")
+    if ctx.sandbox is not None:
+        import asyncio
+
+        try:
+            d = await asyncio.to_thread(
+                ctx.sandbox.http_request, method, url, headers=headers, params=params, body=body
             )
-    except Exception as e:
-        return f"error: {type(e).__name__}: {e}"
+        except Exception as e:
+            return f"error: {type(e).__name__}: {e}"
+    else:
+        import httpx
+
+        try:
+            async with httpx.AsyncClient(follow_redirects=True, timeout=20.0) as c:
+                r = await c.request(method, url, headers=headers, params=params, content=body)
+            d = {"status": r.status_code, "final_url": str(r.url),
+                 "headers": dict(r.headers), "body": r.text}
+        except Exception as e:
+            return f"error: {type(e).__name__}: {e}"
+    if "error" in d:
+        return f"error: {d['error']}"
+    hdrs = {k: v for k, v in list(d.get("headers", {}).items())[:15]}
+    return (f"status={d.get('status')}\nfinal_url={d.get('final_url')}\n"
+            f"headers={hdrs}\nbody[:3000]:\n{str(d.get('body', ''))[:3000]}")
 
 
 async def _exec_command(args: dict[str, Any], ctx: ToolContext) -> str:
@@ -141,17 +155,22 @@ def build_registry(with_sandbox: bool = False) -> ToolRegistry:
         run=_think,
     ))
     reg.add(Tool(
-        name="http_fetch",
-        description="Fetch a URL and return status, headers, and a body snippet. Use for recon/probing.",
+        name="http_request",
+        description=("Make an HTTP request; returns status, headers, and a body snippet. Put "
+                     "injection payloads in `params` or `body` — they are encoded safely (no "
+                     "shell). Routed through the sandbox + capturing proxy when available."),
         parameters={
             "type": "object",
             "properties": {
-                "url": {"type": "string", "description": "Absolute or scheme-less URL"},
-                "method": {"type": "string", "description": "HTTP method (default GET)"},
+                "url": {"type": "string"},
+                "method": {"type": "string", "description": "GET|POST|PUT|... (default GET)"},
+                "params": {"type": "object", "description": "query params; values auto-encoded"},
+                "headers": {"type": "object"},
+                "body": {"type": "string", "description": "raw request body"},
             },
             "required": ["url"],
         },
-        run=_http_fetch,
+        run=_http_request,
     ))
     reg.add(Tool(
         name="note",
