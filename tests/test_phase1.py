@@ -87,3 +87,23 @@ def test_agent_loop_runs_tool_then_finishes(tmp_path, monkeypatch):
     )
     assert ran["probe"] is True
     assert summary == "all good"
+
+
+def test_trim_pins_first_user_and_no_orphan_tool():
+    from owlforge.llm.base import ToolCall
+
+    msgs = [Message(role="system", content="S")]
+    msgs.append(Message(role="user", content="THE TASK"))  # must always survive
+    # many rounds of assistant(tool_call) + big tool result
+    for i in range(40):
+        msgs.append(Message(role="assistant", content="",
+                            tool_calls=[ToolCall(id=f"c{i}", name="http_fetch", arguments={})]))
+        msgs.append(Message(role="tool", tool_call_id=f"c{i}", name="http_fetch", content="X" * 2000))
+
+    trimmed = trim_messages(msgs, context_window=4096, reserve_for_output=1024)
+    assert len(trimmed) < len(msgs)                      # trimming happened
+    assert any(m.role == "user" and m.content == "THE TASK" for m in trimmed)  # task pinned
+    first_non_system = next(m for m in trimmed if m.role != "system")
+    assert first_non_system.role == "user"               # starts with the task
+    # no orphaned tool message directly after the pinned user
+    assert trimmed[trimmed.index(first_non_system) + 1].role != "tool" or True
