@@ -23,15 +23,18 @@ _STYLE = {
 
 
 class Emitter:
-    def __init__(self, assessment_id: str, console: Console | None = None, persist: bool = True) -> None:
+    def __init__(self, assessment_id: str, console: Console | None = None, persist: bool = True,
+                 quiet: bool = False) -> None:
         self.assessment_id = assessment_id
         self.console = console or Console()
         self.persist = persist
+        self.quiet = quiet
 
     def __call__(self, type_: str, message: str, **data) -> None:
-        label = type_.upper().replace("_", " ")
-        style = _STYLE.get(type_, "white")
-        self.console.print(f"[{style}]\\[{label}][/] {message}")
+        if not self.quiet:
+            label = type_.upper().replace("_", " ")
+            style = _STYLE.get(type_, "white")
+            self.console.print(f"[{style}]\\[{label}][/] {message}")
         if not self.persist:
             return
         try:

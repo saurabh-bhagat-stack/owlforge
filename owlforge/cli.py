@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import secrets
+from datetime import UTC
 
 import typer
 from rich.console import Console
@@ -297,6 +298,45 @@ def sandbox_info() -> None:
     """Show the configured sandbox image + daemon port."""
     cfg = load_config()
     console.print({"image": cfg.sandbox.image, "agentd_port": cfg.sandbox.agentd_port, "enabled": cfg.sandbox.enabled})
+
+
+@app.command()
+def bench(
+    models: str = typer.Option(..., "--models", help="Comma-separated model ids to benchmark."),
+    message: str = typer.Option(..., "--message", "-m", help="Mission instructions (same for all)."),
+    target: str = typer.Option(None, "--target", "-t", help="Target (defaults to testing target)."),
+    mode: str = typer.Option("standard", "--mode"),
+    max_turns: int = typer.Option(16, "--max-turns"),
+    oracle: str = typer.Option(None, "--oracle", help="Substring; a VALIDATED finding containing it = recall hit."),
+    offload: bool = typer.Option(True, "--offload/--no-offload", help="Offload other Ollama models between runs."),
+) -> None:
+    """Run one mission across several models and emit a scored compatibility matrix."""
+    import json
+    from datetime import datetime
+
+    from owlforge.bench.runner import run_bench
+    from owlforge.config import owlforge_home
+
+    model_list = [m.strip() for m in models.split(",") if m.strip()]
+    if not model_list:
+        console.print("[red]No models given.[/]")
+        raise typer.Exit(1)
+
+    results, matrix = run_bench(
+        model_list, mission=message, target=target, scan_mode=mode, max_turns=max_turns,
+        oracle=oracle, offload=offload, log=lambda m: console.print(f"[dim]{m}[/]"),
+    )
+    console.print()
+    console.print(matrix)
+
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    outdir = owlforge_home() / "bench" / ts
+    outdir.mkdir(parents=True, exist_ok=True)
+    (outdir / "matrix.md").write_text(matrix + "\n", encoding="utf-8")
+    (outdir / "results.json").write_text(
+        json.dumps([r.__dict__ for r in results], indent=2), encoding="utf-8"
+    )
+    console.print(f"[green]bench written:[/] {outdir}")
 
 
 def main() -> None:
