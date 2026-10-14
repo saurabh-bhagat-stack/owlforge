@@ -22,8 +22,9 @@ class LLMConfig(BaseModel):
     model: str = ""  # operator sets this to their local model id
     temperature: float = 0.2
     max_tokens: int = 4096
-    # Real context window of the local model, used for history trimming (Phase 1).
-    context_window: int = 32768
+    # History-trimming budget. 0 = auto-detect from the provider (Ollama /api/show);
+    # >0 = explicit override (use when the served context is smaller than detected).
+    context_window: int = 0
 
 
 class SandboxConfig(BaseModel):
@@ -84,7 +85,7 @@ api_key = ""
 model = ""
 temperature = 0.2
 max_tokens = 4096
-context_window = 32768
+context_window = 0   # 0 = auto-detect from the model
 
 [sandbox]
 enabled = true

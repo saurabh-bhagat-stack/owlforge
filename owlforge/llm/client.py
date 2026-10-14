@@ -48,6 +48,7 @@ class OpenAICompatClient(LLMClient):
         self.timeout = timeout
         self.max_retries = max_retries
         self.tool_mode = tool_mode
+        self.context_source = "unset"
         self._client = OpenAI(base_url=base_url, api_key=api_key or "sk-no-auth", timeout=timeout)
 
     # -- payload helpers -------------------------------------------------
@@ -171,10 +172,76 @@ class OpenAICompatClient(LLMClient):
         )
 
 
+def _ollama_root(base_url: str) -> str:
+    root = base_url.rstrip("/")
+    if root.endswith("/v1"):
+        root = root[:-3]
+    return root.rstrip("/")
+
+
+def parse_ollama_context(data: dict) -> int | None:
+    """Pure parser for an Ollama /api/show payload -> effective context window.
+
+    Prefers the Modelfile's num_ctx (what the server actually serves) capped by the
+    model's declared context_length. Returns None if neither is present.
+    """
+    import re
+
+    mi = data.get("model_info") or {}
+    declared: int | None = None
+    arch = mi.get("general.architecture")
+    if arch and isinstance(mi.get(f"{arch}.context_length"), int):
+        declared = mi[f"{arch}.context_length"]
+    else:
+        for k, v in mi.items():
+            if k.endswith(".context_length") and isinstance(v, int):
+                declared = v
+                break
+
+    num_ctx: int | None = None
+    m = re.search(r"num_ctx\s+(\d+)", data.get("parameters") or "")
+    if m:
+        num_ctx = int(m.group(1))
+
+    vals = [v for v in (num_ctx, declared) if isinstance(v, int) and v > 0]
+    if not vals:
+        return None
+    return min(vals)
+
+
+def detect_context_window(base_url: str, model: str) -> int | None:
+    """Best-effort: ask the provider (Ollama) for the model's served context. None if unknown."""
+    if not model:
+        return None
+    try:
+        import httpx
+
+        r = httpx.post(f"{_ollama_root(base_url)}/api/show", json={"model": model}, timeout=5.0)
+        if r.status_code != 200:
+            return None
+        return parse_ollama_context(r.json())
+    except Exception:
+        return None
+
+
+def resolve_context_window(cfg) -> tuple[int, str]:
+    """(value, source): explicit override > auto-detected > safe fallback."""
+    configured = getattr(cfg.llm, "context_window", 0) or 0
+    if configured > 0:
+        return configured, "config override"
+    detected = detect_context_window(cfg.llm.base_url, cfg.llm.model)
+    if detected:
+        return detected, "auto-detected"
+    return 8192, "fallback default"
+
+
 def make_client(cfg) -> OpenAICompatClient:
-    return OpenAICompatClient(
+    ctx, source = resolve_context_window(cfg)
+    client = OpenAICompatClient(
         base_url=cfg.llm.base_url,
         api_key=cfg.llm.api_key,
         model=cfg.llm.model,
-        context_window=cfg.llm.context_window,
+        context_window=ctx,
     )
+    client.context_source = source
+    return client

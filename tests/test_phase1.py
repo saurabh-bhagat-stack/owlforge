@@ -133,3 +133,33 @@ def test_max_turns_triggers_final_summary():
         )
     )
     assert "Summary:" in summary
+
+
+def test_parse_ollama_context_prefers_num_ctx_capped_by_declared():
+    from owlforge.llm.client import parse_ollama_context
+
+    data = {
+        "parameters": "stop \"<|im_end|>\"\nnum_ctx                        32768",
+        "model_info": {"general.architecture": "qwen3", "qwen3.context_length": 65536},
+    }
+    assert parse_ollama_context(data) == 32768  # served num_ctx, under the 64k ceiling
+
+    assert parse_ollama_context({"model_info": {"general.architecture": "qwen3",
+                                                "qwen3.context_length": 8192}}) == 8192
+    assert parse_ollama_context({}) is None
+
+
+def test_resolve_context_window_override_and_fallback():
+    from owlforge.config import Config
+    from owlforge.llm.client import resolve_context_window
+
+    cfg = Config()
+    cfg.llm.model = "whatever"
+    cfg.llm.context_window = 12345
+    assert resolve_context_window(cfg) == (12345, "config override")
+
+    # auto (0) with an unreachable provider -> fallback
+    cfg.llm.context_window = 0
+    cfg.llm.base_url = "http://127.0.0.1:59999/v1"
+    val, source = resolve_context_window(cfg)
+    assert val == 8192 and source == "fallback default"

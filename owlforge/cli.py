@@ -104,6 +104,7 @@ def run(
             f"project: {project}\n"
             f"target:  {target}\n"
             f"model:   {cfg.llm.model} @ {cfg.llm.base_url}\n"
+            f"context: {client.context_window} ({client.context_source})\n"
             f"mode:    {mode}",
             title="assessment started",
             border_style="cyan",
