@@ -79,3 +79,37 @@ def test_report_build(isolated):
     md, path = build_and_save_report("asmt_x")
     assert "SQLi login" in md and "Overall risk: **Critical**" in md
     assert path and path.endswith("report.md")
+
+
+def test_create_finding_tool_persists_no_detached_error(isolated):
+    from sqlmodel import select
+
+    from owlforge.store.models import Finding
+    from owlforge.tools.base import ToolContext
+    from owlforge.tools.builtin import build_registry
+
+    tool = build_registry(with_sandbox=False).get("create_finding")
+    assert tool is not None
+    ctx = ToolContext(assessment_id="asmt_x", target="https://t.test", emit=Emitter("asmt_x", persist=False))
+    out = asyncio.run(tool.run(
+        {"title": "Test XSS", "severity": "high", "repro_command": "curl x", "success_signal": "X"}, ctx))
+    assert "filed as candidate" in out and "error" not in out.lower()
+    with isolated.session() as s:
+        rows = s.exec(select(Finding).where(Finding.assessment_id == "asmt_x")).all()
+    assert len(rows) == 1 and rows[0].title == "Test XSS"
+
+
+def test_validation_rejects_html_encoded_only_reflection(isolated):
+    from owlforge.engine.validate import validate_findings
+    from owlforge.store.models import Finding
+
+    fid = _mk(isolated, id="f_esc", title="reflected XSS?", severity="high",
+              repro_command="curl ...", success_signal="<script>owl</script>")
+    # Sandbox returns the payload ONLY in HTML-encoded form -> escaped -> not exploitable.
+    counts = asyncio.run(validate_findings(
+        assessment_id="asmt_x",
+        sandbox=_FakeSandbox("var s = '&lt;script&gt;owl&lt;/script&gt;';"),
+        emit=Emitter("asmt_x", persist=False)))
+    assert counts["rejected"] == 1 and counts["validated"] == 0
+    with isolated.session() as s:
+        assert s.get(Finding, fid).status == "false_positive"

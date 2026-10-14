@@ -95,11 +95,12 @@ async def _create_finding(args: dict[str, Any], ctx: ToolContext) -> str:
     if not title:
         return "error: 'title' is required"
     fid = f"find_{secrets.token_hex(5)}"
+    severity = str(args.get("severity", "medium"))
     finding = Finding(
         id=fid,
         assessment_id=ctx.assessment_id,
         title=title,
-        severity=str(args.get("severity", "medium")),
+        severity=severity,
         confidence=str(args.get("confidence", "medium")),
         target=str(args.get("target", ctx.target)),
         endpoint=str(args.get("endpoint", "")) or None,
@@ -120,7 +121,7 @@ async def _create_finding(args: dict[str, Any], ctx: ToolContext) -> str:
             s.commit()
     except Exception as e:
         return f"error saving finding: {type(e).__name__}: {e}"
-    ctx.emit("finding", f"candidate filed: [{finding.severity}] {title}")
+    ctx.emit("finding", f"candidate filed: [{severity}] {title}")
     return (f"Finding {fid} filed as candidate. It will be VALIDATED by re-running your "
             f"repro_command and checking for success_signal — supply both for auto-validation.")
 
