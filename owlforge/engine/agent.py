@@ -44,12 +44,17 @@ async def run_single_agent(
 
         if not turn_result.tool_calls:
             idle_nudges += 1
-            if idle_nudges >= 2:
-                emit("log", "no tool call twice; ending loop")
+            if idle_nudges >= 3:
+                emit("log", "no tool call 3x; ending loop")
                 break
             messages.append(Message(role="assistant", content=turn_result.content or ""))
             messages.append(Message(role="user", content=(
-                "You did not call a tool. Call `think`, `http_fetch`, `note`, or `finish`.")))
+                "You MUST call a tool to make progress. If you have evidence of a vulnerability "
+                "(even partial), call `create_finding` now — include a repro_command and a "
+                "success_signal so it can be validated. If a vector was blocked (e.g. escaped), "
+                "try a DIFFERENT one (SQLi, path traversal, another parameter/endpoint) with "
+                "`exec_command`. If you are genuinely finished, call `finish`. Do not reply with "
+                "prose only.")))
             continue
         idle_nudges = 0
 
