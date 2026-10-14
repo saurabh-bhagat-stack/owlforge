@@ -23,7 +23,7 @@ class LLMConfig(BaseModel):
     temperature: float = 0.2
     max_tokens: int = 4096
     # Real context window of the local model, used for history trimming (Phase 1).
-    context_window: int = 8192
+    context_window: int = 32768
 
 
 class SandboxConfig(BaseModel):
@@ -84,7 +84,7 @@ api_key = ""
 model = ""
 temperature = 0.2
 max_tokens = 4096
-context_window = 8192
+context_window = 32768
 
 [sandbox]
 enabled = true

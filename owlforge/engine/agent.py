@@ -74,5 +74,15 @@ async def run_single_agent(
             emit("status", "assessment finished by agent")
             return last_summary
 
-    emit("status", "max turns reached")
+    emit("status", "max turns reached — requesting final summary")
+    try:
+        messages.append(Message(role="user", content=(
+            "You have reached your step budget. Do NOT call any tools. Write a concise "
+            "summary of what you examined and what you found.")))
+        final = client.chat(messages, [], temperature=0.2, max_tokens=512)
+        if final.content and final.content.strip():
+            last_summary = final.content.strip()
+    except Exception as e:  # summary is best-effort
+        emit("log", f"summary generation failed: {type(e).__name__}: {e}")
+    emit("finish", last_summary[:1000])
     return last_summary

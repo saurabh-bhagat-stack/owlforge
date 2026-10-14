@@ -107,3 +107,29 @@ def test_trim_pins_first_user_and_no_orphan_tool():
     assert first_non_system.role == "user"               # starts with the task
     # no orphaned tool message directly after the pinned user
     assert trimmed[trimmed.index(first_non_system) + 1].role != "tool" or True
+
+
+class _ToolThenSummaryClient:
+    """Always asks to probe (never finishes); when called with no tools (the
+    forced end-of-run summary), returns a summary string instead."""
+
+    def chat(self, messages, tools=None, *, temperature=None, max_tokens=None) -> AssistantTurn:
+        if not tools:  # the final summarize call
+            return AssistantTurn(content="Summary: probed the target a few times.")
+        return AssistantTurn(content="probing", tool_calls=[ToolCall(id="c", name="probe", arguments={})])
+
+
+def test_max_turns_triggers_final_summary():
+    async def _probe(args, ctx):
+        return "ok"
+
+    reg = ToolRegistry()
+    reg.add(Tool(name="probe", description="p", parameters={"type": "object", "properties": {}}, run=_probe))
+    emit = Emitter("asmt_mt", persist=False)
+    summary = asyncio.run(
+        run_single_agent(
+            client=_ToolThenSummaryClient(), registry=reg, emit=emit, assessment_id="asmt_mt",
+            target="https://example.test", instructions="probe", scan_mode="quick", max_turns=3,
+        )
+    )
+    assert "Summary:" in summary
