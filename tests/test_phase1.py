@@ -217,10 +217,3 @@ def test_summary_falls_back_to_actions():
         )
     )
     assert "Actions taken" in summary and "httpx" in summary
-
-
-def test_free_other_models_noops_on_bad_endpoint():
-    from owlforge.llm.client import free_other_ollama_models
-
-    # Unreachable provider: must not raise.
-    free_other_ollama_models("http://127.0.0.1:59998/v1", "whatever")

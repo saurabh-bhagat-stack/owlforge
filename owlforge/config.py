@@ -25,9 +25,6 @@ class LLMConfig(BaseModel):
     # History-trimming budget. 0 = auto-detect from the provider (Ollama /api/show);
     # >0 = explicit override (use when the served context is smaller than detected).
     context_window: int = 0
-    # Before a run, offload any OTHER models the local provider has in memory (Ollama).
-    # Handy on limited RAM + for model benchmarking (one model resident at a time).
-    free_other_models: bool = False
 
 
 class SandboxConfig(BaseModel):
@@ -89,7 +86,6 @@ model = ""
 temperature = 0.2
 max_tokens = 4096
 context_window = 0   # 0 = auto-detect from the model
-free_other_models = false   # true = offload other Ollama models before a run (saves RAM; good for benchmarking)
 
 [sandbox]
 enabled = true
