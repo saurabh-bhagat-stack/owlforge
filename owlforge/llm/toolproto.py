@@ -50,6 +50,44 @@ def _try_json(raw: str) -> Any | None:
         return None
 
 
+def _iter_json_objects(text: str):
+    """Yield (start_index, substring) for each top-level balanced {...} object.
+
+    Handles models that concatenate several JSON tool-call objects in one response
+    (and trailing junk) — a plain first-brace/last-brace slice would be invalid JSON.
+    """
+    i = 0
+    n = len(text)
+    while i < n:
+        if text[i] != "{":
+            i += 1
+            continue
+        depth = 0
+        in_str = False
+        esc = False
+        for j in range(i, n):
+            c = text[j]
+            if in_str:
+                if esc:
+                    esc = False
+                elif c == "\\":
+                    esc = True
+                elif c == '"':
+                    in_str = False
+            elif c == '"':
+                in_str = True
+            elif c == "{":
+                depth += 1
+            elif c == "}":
+                depth -= 1
+                if depth == 0:
+                    yield i, text[i : j + 1]
+                    break
+        else:
+            return  # unbalanced tail; nothing more to find
+        i = j + 1
+
+
 def parse_tool_calls(text: str, tool_names: set[str]) -> tuple[str | None, list[ToolCall]]:
     """Return (leftover_prose, tool_calls). At most one tool call is extracted."""
     if not text:
@@ -69,11 +107,11 @@ def parse_tool_calls(text: str, tool_names: set[str]) -> tuple[str | None, list[
     if tc:
         return None, [tc]
 
-    # 3) first {...} span
-    i, j = text.find("{"), text.rfind("}")
-    if 0 <= i < j:
-        tc = _coerce(_try_json(text[i : j + 1]), tool_names)
+    # 3. Scan for the FIRST balanced {...} object that coerces to a tool call
+    #    (models may concatenate several objects, or append prose/junk).
+    for start, obj in _iter_json_objects(text):
+        tc = _coerce(_try_json(obj), tool_names)
         if tc:
-            return (text[:i].strip() or None), [tc]
+            return (text[:start].strip() or None), [tc]
 
     return (text.strip() or None), []

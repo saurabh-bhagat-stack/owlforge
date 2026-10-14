@@ -230,3 +230,13 @@ def test_strip_think_and_parse_textual_toolcall():
     _, calls = parse_tool_calls(cleaned, {"http_request", "finish"})
     assert calls and calls[0].name == "http_request"
     assert calls[0].arguments["params"]["q"] == "<svg>"
+
+
+def test_parse_concatenated_tool_objects_takes_first():
+    from owlforge.llm.toolproto import parse_tool_calls
+
+    concat = ('{"tool": "think", "args": {"thought": "plan"}}'
+              '{"tool": "http_request", "args": {"url": "https://x/", '
+              '"params": {"q": "<script>alert(1)</script>"}}}')
+    _, calls = parse_tool_calls(concat, {"think", "http_request", "finish"})
+    assert len(calls) == 1 and calls[0].name == "think"
