@@ -85,6 +85,46 @@ async def _list_requests(args: dict[str, Any], ctx: ToolContext) -> str:
     return "\n".join(lines)
 
 
+async def _create_finding(args: dict[str, Any], ctx: ToolContext) -> str:
+    import secrets
+
+    from owlforge.store.db import session
+    from owlforge.store.models import Finding
+
+    title = str(args.get("title", "")).strip()
+    if not title:
+        return "error: 'title' is required"
+    fid = f"find_{secrets.token_hex(5)}"
+    finding = Finding(
+        id=fid,
+        assessment_id=ctx.assessment_id,
+        title=title,
+        severity=str(args.get("severity", "medium")),
+        confidence=str(args.get("confidence", "medium")),
+        target=str(args.get("target", ctx.target)),
+        endpoint=str(args.get("endpoint", "")) or None,
+        method=str(args.get("method", "")) or None,
+        technical_analysis=str(args.get("technical_analysis", "")),
+        proof_of_concept=str(args.get("proof_of_concept", "")),
+        impact=str(args.get("impact", "")),
+        remediation=str(args.get("remediation", "")),
+        repro_command=str(args.get("repro_command", "")),
+        success_signal=str(args.get("success_signal", "")),
+        evidence=list(args.get("evidence", []) or []),
+        status="candidate",
+        filed_by_agent_id=ctx.agent_id if hasattr(ctx, "agent_id") else None,
+    )
+    try:
+        with session() as s:
+            s.add(finding)
+            s.commit()
+    except Exception as e:
+        return f"error saving finding: {type(e).__name__}: {e}"
+    ctx.emit("finding", f"candidate filed: [{finding.severity}] {title}")
+    return (f"Finding {fid} filed as candidate. It will be VALIDATED by re-running your "
+            f"repro_command and checking for success_signal — supply both for auto-validation.")
+
+
 async def _finish(args: dict[str, Any], ctx: ToolContext) -> str:
     summary = str(args.get("summary", "")).strip()
     ctx.emit("finish", summary[:1000])
@@ -121,6 +161,30 @@ def build_registry(with_sandbox: bool = False) -> ToolRegistry:
             "required": ["title", "content"],
         },
         run=_note,
+    ))
+    reg.add(Tool(
+        name="create_finding",
+        description=("File a vulnerability finding as a CANDIDATE. For auto-validation, include "
+                     "repro_command (a shell command that demonstrates the issue in the sandbox) "
+                     "and success_signal (text expected in that command's output when the vuln is present)."),
+        parameters={
+            "type": "object",
+            "properties": {
+                "title": {"type": "string"},
+                "severity": {"type": "string", "description": "critical|high|medium|low|info"},
+                "confidence": {"type": "string", "description": "low|medium|high"},
+                "endpoint": {"type": "string"},
+                "method": {"type": "string"},
+                "technical_analysis": {"type": "string"},
+                "proof_of_concept": {"type": "string"},
+                "impact": {"type": "string"},
+                "remediation": {"type": "string"},
+                "repro_command": {"type": "string", "description": "shell command re-run during validation"},
+                "success_signal": {"type": "string", "description": "text expected in repro output if vulnerable"},
+            },
+            "required": ["title", "severity"],
+        },
+        run=_create_finding,
     ))
     reg.add(Tool(
         name="finish",

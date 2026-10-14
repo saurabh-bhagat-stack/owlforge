@@ -20,10 +20,12 @@ from owlforge.config import (
 )
 from owlforge.engine.agent import run_single_agent
 from owlforge.engine.events import Emitter
+from owlforge.engine.validate import validate_findings
 from owlforge.llm.client import LLMError, make_client
+from owlforge.report.builder import build_and_save_report
 from owlforge.sandbox import manager
 from owlforge.store.db import init_db, session
-from owlforge.store.models import Assessment, Finding
+from owlforge.store.models import Assessment, Finding, Report
 from owlforge.tools.builtin import build_registry
 
 app = typer.Typer(
@@ -142,6 +144,7 @@ def run(
     registry = build_registry(with_sandbox=sandbox_client is not None)
     status = "completed"
     summary = ""
+    report_path = None
     try:
         summary = asyncio.run(
             run_single_agent(
@@ -150,6 +153,12 @@ def run(
                 sandbox=sandbox_client,
             )
         )
+        emit("status", "validation phase")
+        vcounts = asyncio.run(validate_findings(assessment_id=aid, sandbox=sandbox_client, emit=emit))
+        emit("status", f"validation — {vcounts['validated']} validated, "
+                       f"{vcounts['rejected']} rejected, {vcounts['manual']} manual")
+        emit("status", "reporting phase")
+        _md, report_path = build_and_save_report(aid)
     except KeyboardInterrupt:
         status = "stopped"
         console.print("[yellow]interrupted[/]")
@@ -167,9 +176,16 @@ def run(
             s.add(a)
             s.commit()
 
+    with session() as s:
+        fcount = len(s.exec(select(Finding).where(Finding.assessment_id == aid)).all())
+        vcount = len(s.exec(select(Finding).where(
+            Finding.assessment_id == aid, Finding.status == "validated")).all())
+    tail = f"\n\nfindings: {vcount} validated / {fcount} total"
+    if report_path:
+        tail += f"\nreport: {report_path}"
     console.print(
         Panel.fit(
-            summary or "(no summary)",
+            (summary or "(no summary)") + tail,
             title=f"assessment {status}",
             border_style="green" if status == "completed" else "red",
         )
@@ -224,9 +240,24 @@ def findings(assessment_id: str) -> None:
 
 
 @app.command()
-def report(assessment_id: str) -> None:
-    """Render an assessment report. (Phase 3.)"""
-    console.print("[yellow]Reporting lands in Phase 3.[/]")
+def report(
+    assessment_id: str,
+    rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild from current findings."),
+) -> None:
+    """Print the assessment report (markdown)."""
+    init_db()
+    if rebuild:
+        md, path = build_and_save_report(assessment_id)
+        console.print(md)
+        if path:
+            console.print(f"[dim]written: {path}[/]")
+        return
+    with session() as s:
+        rep = s.get(Report, assessment_id)
+    if not rep or not rep.body_markdown:
+        console.print("[yellow]No report yet. Run the assessment, or use --rebuild.[/]")
+        raise typer.Exit(1)
+    console.print(rep.body_markdown)
 
 
 @sandbox_app.command("build")

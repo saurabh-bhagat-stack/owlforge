@@ -74,6 +74,11 @@ class Finding(SQLModel, table=True):
     impact: str = ""
     remediation: str = ""
     evidence: list[dict] = Field(default_factory=list, sa_column=Column(JSON))
+    # Evidence-gated validation: the agent supplies a command that reproduces the
+    # finding and a signal expected in its output. The validator re-runs it.
+    repro_command: str = ""
+    success_signal: str = ""
+    validation_note: str = ""
     filed_by_agent_id: str | None = None
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
