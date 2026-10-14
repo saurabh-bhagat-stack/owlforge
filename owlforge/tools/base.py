@@ -4,9 +4,12 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from owlforge.llm.base import ToolSpec
+
+if TYPE_CHECKING:
+    from owlforge.sandbox.client import SandboxClient
 
 
 @dataclass
@@ -14,7 +17,7 @@ class ToolContext:
     assessment_id: str
     target: str
     emit: Callable[..., None]
-    # Phase 2 will add a sandbox RPC client here; Phase 1 tools run engine-side.
+    sandbox: SandboxClient | None = None  # set when a sandbox container is up
 
 
 ToolFn = Callable[[dict[str, Any], ToolContext], Awaitable[str]]

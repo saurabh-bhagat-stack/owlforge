@@ -1,19 +1,24 @@
 # owlforge-sandbox — our own disposable execution environment.
-# Phase 0: a minimal, buildable skeleton. The tool suite (nmap/httpx/nuclei/ffuf/
-# sqlmap/curl) and mitmproxy are added in Phase 2 — intentionally NOT here yet, so
-# the image stays tiny while we build the engine.
+# debian-slim + a lean recon toolset + owlforge-agentd. No set-e death trap.
+# ProjectDiscovery tools (httpx/nuclei/ffuf) + mitmproxy are added in a later pass.
 
 FROM debian:12-slim AS base
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PIP_NO_CACHE_DIR=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    OWLFORGE_WORKSPACE=/workspace
 
+# Recon toolset (apt, reliable + small) + python for the daemon.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-pip python3-venv ca-certificates \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates curl wget \
+        nmap dnsutils iputils-ping net-tools \
+        jq openssl \
+        python3 python3-venv python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
-# --- owlforge-agentd (the in-container control daemon) ---
+# owlforge-agentd (isolated venv so apt-managed python stays clean).
 WORKDIR /opt/owlforge
 COPY agentd/requirements.txt /opt/owlforge/agentd/requirements.txt
 RUN python3 -m venv /opt/owlforge/venv \
@@ -22,7 +27,6 @@ COPY agentd /opt/owlforge/agentd
 COPY entrypoint.sh /opt/owlforge/entrypoint.sh
 RUN chmod +x /opt/owlforge/entrypoint.sh
 
-# TODO(Phase 2): install the offensive tool suite + mitmproxy here.
-
+RUN mkdir -p /workspace
 EXPOSE 47130
 ENTRYPOINT ["/opt/owlforge/entrypoint.sh"]

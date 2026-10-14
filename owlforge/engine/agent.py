@@ -5,6 +5,7 @@ from __future__ import annotations
 from owlforge.engine.events import Emitter
 from owlforge.engine.prompts import system_prompt
 from owlforge.llm.base import LLMClient, Message
+from owlforge.sandbox.client import SandboxClient
 from owlforge.tools.base import ToolContext, ToolRegistry
 
 _MAX_TOOL_RESULT = 8000
@@ -20,8 +21,9 @@ async def run_single_agent(
     instructions: str,
     scan_mode: str,
     max_turns: int = 20,
+    sandbox: SandboxClient | None = None,
 ) -> str:
-    ctx = ToolContext(assessment_id=assessment_id, target=target, emit=emit)
+    ctx = ToolContext(assessment_id=assessment_id, target=target, emit=emit, sandbox=sandbox)
     messages: list[Message] = [
         Message(role="system", content=system_prompt(target, instructions, scan_mode)),
         Message(role="user", content=f"Assess {target}. {instructions}"),

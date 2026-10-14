@@ -1,16 +1,55 @@
-"""owlforge-agentd — minimal Phase 0 daemon.
+"""owlforge-agentd — the in-container control daemon.
 
-Exposes /health so the engine can gate on readiness. Phase 2 adds /exec (with a
-streaming channel), /files, and /proxy, all behind a per-assessment bearer token.
+The engine treats the sandbox as a service with a typed contract, not a shell.
+Phase 2 exposes:
+  GET  /health            readiness (no auth) — engine gates the mission on this
+  POST /exec              run a command, return exit/stdout/stderr/timing (auth)
+  GET  /file?path=...     read a file from the workspace for evidence (auth)
+
+Auth: if OWLFORGE_AGENTD_TOKEN is set in the environment, every non-health request
+must carry `Authorization: Bearer <token>`. The engine generates a per-container
+token and injects it, so the published localhost port can't be driven by anything
+else on the host. Streaming output and long-running processes come in a later pass.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
+import time
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from pydantic import BaseModel
 
-app = FastAPI(title="owlforge-agentd", version="0.0.1")
+app = FastAPI(title="owlforge-agentd", version="0.2.0")
+
+TOKEN = os.environ.get("OWLFORGE_AGENTD_TOKEN", "")
+WORKSPACE = os.environ.get("OWLFORGE_WORKSPACE", "/workspace")
+MAX_OUTPUT = 200_000  # chars per stream, hard cap
+
+
+def auth(authorization: str = Header(default="")) -> None:
+    if not TOKEN:
+        return  # dev / no-auth mode
+    expected = f"Bearer {TOKEN}"
+    if authorization != expected:
+        raise HTTPException(status_code=401, detail="bad or missing bearer token")
+
+
+class ExecRequest(BaseModel):
+    command: str
+    workdir: str | None = None
+    timeout_ms: int = 60_000
+    bypass_proxy: bool = False
+
+
+class ExecResult(BaseModel):
+    exit_code: int
+    stdout: str
+    stderr: str
+    duration_ms: int
+    timed_out: bool = False
+    truncated: bool = False
 
 
 @app.get("/health")
@@ -18,6 +57,58 @@ def health() -> dict:
     return {"status": "ok", "service": "owlforge-agentd", "version": app.version}
 
 
-@app.get("/")
-def root() -> dict:
-    return {"service": "owlforge-agentd", "port": int(os.environ.get("OWLFORGE_AGENTD_PORT", "47130"))}
+@app.post("/exec", response_model=ExecResult, dependencies=[Depends(auth)])
+async def exec_command(req: ExecRequest) -> ExecResult:
+    workdir = req.workdir or WORKSPACE
+    # pipefail so failures inside pipelines surface; optional proxy unset.
+    prefix = (
+        "unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY no_proxy NO_PROXY; "
+        if req.bypass_proxy
+        else ""
+    )
+    wrapped = f"set -o pipefail; {prefix}{req.command}"
+
+    start = time.monotonic()
+    try:
+        os.makedirs(workdir, exist_ok=True)
+    except Exception:
+        pass
+    proc = await asyncio.create_subprocess_exec(
+        "bash", "-lc", wrapped,
+        cwd=workdir if os.path.isdir(workdir) else None,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    timed_out = False
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=max(1, req.timeout_ms) / 1000)
+        code = proc.returncode or 0
+    except TimeoutError:
+        timed_out = True
+        try:
+            proc.kill()
+        except Exception:
+            pass
+        out, err = b"", b"(killed: timeout)"
+        code = 124
+    dur = int((time.monotonic() - start) * 1000)
+
+    so = out.decode("utf-8", "replace")
+    se = err.decode("utf-8", "replace")
+    truncated = len(so) > MAX_OUTPUT or len(se) > MAX_OUTPUT
+    return ExecResult(
+        exit_code=code, stdout=so[:MAX_OUTPUT], stderr=se[:MAX_OUTPUT],
+        duration_ms=dur, timed_out=timed_out, truncated=truncated,
+    )
+
+
+@app.get("/file", dependencies=[Depends(auth)])
+def read_file(path: str = Query(...)) -> dict:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            data = fh.read(MAX_OUTPUT)
+        return {"path": path, "content": data}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="not found") from None
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e)) from None

@@ -47,13 +47,33 @@ async def _http_fetch(args: dict[str, Any], ctx: ToolContext) -> str:
         return f"error: {type(e).__name__}: {e}"
 
 
+async def _exec_command(args: dict[str, Any], ctx: ToolContext) -> str:
+    if ctx.sandbox is None:
+        return "error: no sandbox available. exec_command requires the owlforge-sandbox container."
+    command = str(args.get("command", "")).strip()
+    if not command:
+        return "error: 'command' is required"
+    workdir = args.get("workdir")
+    timeout_ms = int(args.get("timeout_ms", 60_000))
+    ctx.emit("tool_call", f"exec_command: {command[:120]}")
+    try:
+        import asyncio
+
+        r = await asyncio.to_thread(ctx.sandbox.exec, command, workdir=workdir, timeout_ms=timeout_ms)
+    except Exception as e:
+        return f"error: {type(e).__name__}: {e}"
+    head = f"exit={r.exit_code} ({r.duration_ms}ms{' TIMEOUT' if r.timed_out else ''})"
+    body = f"STDOUT:\n{r.stdout[:6000]}\nSTDERR:\n{r.stderr[:2000]}"
+    return f"{head}\n{body}"
+
+
 async def _finish(args: dict[str, Any], ctx: ToolContext) -> str:
     summary = str(args.get("summary", "")).strip()
     ctx.emit("finish", summary[:1000])
     return "Assessment loop complete."
 
 
-def build_registry() -> ToolRegistry:
+def build_registry(with_sandbox: bool = False) -> ToolRegistry:
     reg = ToolRegistry()
     reg.add(Tool(
         name="think",
@@ -91,4 +111,20 @@ def build_registry() -> ToolRegistry:
         run=_finish,
         lifecycle=True,
     ))
+    if with_sandbox:
+        reg.add(Tool(
+            name="exec_command",
+            description=("Run a shell command inside the isolated sandbox container "
+                         "(curl, nmap, dig, jq, etc.). Returns exit code, stdout, stderr."),
+            parameters={
+                "type": "object",
+                "properties": {
+                    "command": {"type": "string"},
+                    "workdir": {"type": "string", "description": "default /workspace"},
+                    "timeout_ms": {"type": "number", "description": "default 60000"},
+                },
+                "required": ["command"],
+            },
+            run=_exec_command,
+        ))
     return reg

@@ -11,10 +11,17 @@ from rich.table import Table
 from sqlmodel import select
 
 from owlforge import __version__
-from owlforge.config import config_path, load_config, owlforge_home, write_default_config
+from owlforge.config import (
+    assessments_dir,
+    config_path,
+    load_config,
+    owlforge_home,
+    write_default_config,
+)
 from owlforge.engine.agent import run_single_agent
 from owlforge.engine.events import Emitter
 from owlforge.llm.client import LLMError, make_client
+from owlforge.sandbox import manager
 from owlforge.store.db import init_db, session
 from owlforge.store.models import Assessment, Finding
 from owlforge.tools.builtin import build_registry
@@ -67,8 +74,9 @@ def run(
     message: str = typer.Option(..., "--message", "-m", help="Plain-language assessment instructions."),
     max_turns: int = typer.Option(20, "--max-turns", help="Max agent turns."),
     model: str = typer.Option(None, "--model", help="Override the configured model id (e.g. saluki-27b:latest)."),
+    no_sandbox: bool = typer.Option(False, "--no-sandbox", help="Skip the sandbox even if configured."),
 ) -> None:
-    """Start an assessment and run the Phase 1 single-agent loop against a local model."""
+    """Start an assessment and run the single-agent loop, with the sandbox if available."""
     import asyncio
 
     cfg = load_config()
@@ -98,21 +106,40 @@ def run(
         )
         s.commit()
 
-    console.print(
-        Panel.fit(
-            f"id:      [bold cyan]{aid}[/]\n"
-            f"project: {project}\n"
-            f"target:  {target}\n"
-            f"model:   {cfg.llm.model} @ {cfg.llm.base_url}\n"
-            f"context: {client.context_window} ({client.context_source})\n"
-            f"mode:    {mode}",
-            title="assessment started",
-            border_style="cyan",
-        )
-    )
+    sblog = lambda m: console.print(rf"[dim]\[sandbox] {m}[/]")  # noqa: E731
+    sandbox_session = None
+    sandbox_client = None
+    if cfg.sandbox.enabled and not no_sandbox:
+        if not manager.docker_available():
+            console.print("[yellow]Docker not available — running without the sandbox (exec_command disabled).[/]")
+        elif not manager.image_exists(cfg.sandbox.image):
+            console.print(
+                f"[yellow]Sandbox image not built ({cfg.sandbox.image}). Run "
+                f"'owlforge sandbox build'. Running without exec_command for now.[/]"
+            )
+        else:
+            try:
+                sandbox_session = manager.start(
+                    cfg.sandbox.image, workspace=str(assessments_dir() / aid), log=sblog
+                )
+                sandbox_client = sandbox_session.client
+            except Exception as e:
+                console.print(f"[red]sandbox start failed:[/] {e}")
+                console.print("[yellow]running without exec_command[/]")
+
+    panel = [
+        f"id:      [bold cyan]{aid}[/]",
+        f"project: {project}",
+        f"target:  {target}",
+        f"model:   {cfg.llm.model} @ {cfg.llm.base_url}",
+        f"context: {client.context_window} ({client.context_source})",
+        f"sandbox: {'on' if sandbox_client else 'off'}",
+        f"mode:    {mode}",
+    ]
+    console.print(Panel.fit(chr(10).join(panel), title="assessment started", border_style="cyan"))
 
     emit = Emitter(aid, console=console)
-    registry = build_registry()
+    registry = build_registry(with_sandbox=sandbox_client is not None)
     status = "completed"
     summary = ""
     try:
@@ -120,6 +147,7 @@ def run(
             run_single_agent(
                 client=client, registry=registry, emit=emit, assessment_id=aid,
                 target=target, instructions=message, scan_mode=mode, max_turns=max_turns,
+                sandbox=sandbox_client,
             )
         )
     except KeyboardInterrupt:
@@ -128,6 +156,9 @@ def run(
     except Exception as e:
         status = "failed"
         emit("error", f"{type(e).__name__}: {e}")
+    finally:
+        if sandbox_session:
+            manager.stop(sandbox_session, log=sblog)
 
     with session() as s:
         a = s.get(Assessment, aid)
@@ -199,17 +230,35 @@ def report(assessment_id: str) -> None:
 
 
 @sandbox_app.command("build")
-def sandbox_build(run_it: bool = typer.Option(False, "--run", help="Actually run the build.")) -> None:
-    """Build the owlforge-sandbox image (Phase 2 image; Phase 0 prints the command)."""
-    cfg = load_config()
-    cmd = f"docker build -t {cfg.sandbox.image} ./sandbox"
-    console.print(f"[bold]build command:[/] {cmd}")
-    if not run_it:
-        console.print("[dim]Dry run. Re-run with --run once the sandbox image is fleshed out (Phase 2).[/]")
-        return
-    import subprocess
+def sandbox_build() -> None:
+    """Build the owlforge-sandbox image from ./sandbox."""
+    from pathlib import Path
 
-    raise SystemExit(subprocess.call(cmd, shell=True))
+    cfg = load_config()
+    ctx_dir = Path(__file__).resolve().parents[1] / "sandbox"
+    if not (ctx_dir / "Dockerfile").exists():
+        console.print(f"[red]No Dockerfile at {ctx_dir}[/] (run from a source checkout).")
+        raise typer.Exit(1)
+    if not manager.docker_available():
+        console.print("[red]Docker is not available.[/]")
+        raise typer.Exit(1)
+    ok = manager.build_image(cfg.sandbox.image, ctx_dir, log=lambda m: console.print(f"[dim]{m}[/]"))
+    console.print(f"[green]built {cfg.sandbox.image}[/]" if ok else "[red]build failed[/]")
+    raise typer.Exit(0 if ok else 1)
+
+
+@sandbox_app.command("status")
+def sandbox_status() -> None:
+    """Show docker availability + whether the sandbox image is built."""
+    cfg = load_config()
+    docker = manager.docker_available()
+    built = docker and manager.image_exists(cfg.sandbox.image)
+    console.print({
+        "docker_available": docker,
+        "image": cfg.sandbox.image,
+        "image_built": built,
+        "agentd_container_port": manager.AGENTD_CONTAINER_PORT,
+    })
 
 
 @sandbox_app.command("info")
