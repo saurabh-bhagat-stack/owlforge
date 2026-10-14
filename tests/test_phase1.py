@@ -217,3 +217,16 @@ def test_summary_falls_back_to_actions():
         )
     )
     assert "Actions taken" in summary and "httpx" in summary
+
+
+def test_strip_think_and_parse_textual_toolcall():
+    from owlforge.llm.client import _strip_think
+    from owlforge.llm.toolproto import parse_tool_calls
+
+    raw = ('<think>let me probe the search</think>\n'
+           '{"tool": "http_request", "args": {"url": "https://x/", "params": {"q": "<svg>"}}}')
+    cleaned = _strip_think(raw)
+    assert "<think>" not in cleaned and "</think>" not in cleaned
+    _, calls = parse_tool_calls(cleaned, {"http_request", "finish"})
+    assert calls and calls[0].name == "http_request"
+    assert calls[0].arguments["params"]["q"] == "<svg>"

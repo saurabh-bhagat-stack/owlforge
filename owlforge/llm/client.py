@@ -24,6 +24,16 @@ class LLMError(RuntimeError):
     pass
 
 
+def _strip_think(text: str | None) -> str:
+    """Remove reasoning-model <think>...</think> leakage from content."""
+    if not text:
+        return ""
+    import re
+
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.S | re.I)
+    return text.replace("</think>", "").replace("<think>", "").strip()
+
+
 class OpenAICompatClient(LLMClient):
     def __init__(
         self,
@@ -108,11 +118,25 @@ class OpenAICompatClient(LLMClient):
 
         if use_native:
             try:
-                return self._chat_native(msgs, tools, temperature, max_tokens)
+                turn = self._chat_native(msgs, tools, temperature, max_tokens)
             except LLMError:
                 if self.tool_mode == "native":
                     raise
                 self.tool_mode = "text"  # sticky fallback for the rest of the session
+                return self._chat_text(msgs, tools, temperature, max_tokens)
+            # Salvage: many models (esp. reasoning GGUFs) emit tool calls as TEXT in the
+            # content field rather than as native tool_calls. If native returned none,
+            # parse the content as our text protocol before treating the turn as idle.
+            if not turn.tool_calls and turn.content:
+                leftover, calls = parse_tool_calls(_strip_think(turn.content), {t.name for t in tools})
+                if calls:
+                    turn.tool_calls = calls
+                    turn.content = leftover
+                    if self.tool_mode == "auto":
+                        self.tool_mode = "text"
+            elif turn.content:
+                turn.content = _strip_think(turn.content)
+            return turn
 
         return self._chat_text(msgs, tools, temperature, max_tokens)
 
@@ -160,7 +184,7 @@ class OpenAICompatClient(LLMClient):
         }
         resp = self._complete(payload)
         choice = resp.choices[0]
-        text = choice.message.content or ""
+        text = _strip_think(choice.message.content or "")
         leftover, calls = parse_tool_calls(text, {t.name for t in tools})
         usage = getattr(resp, "usage", None)
         return AssistantTurn(
