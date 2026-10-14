@@ -29,7 +29,8 @@ async def run_single_agent(
         Message(role="user", content=f"Assess {target}. {instructions}"),
     ]
     specs = registry.specs()
-    last_summary = "No summary produced."
+    last_summary = ""
+    notes: list[str] = []
     idle_nudges = 0
 
     for turn in range(1, max_turns + 1):
@@ -68,13 +69,15 @@ async def run_single_agent(
                 emit("tool_result", f"{tool.name} -> {result[:200]}")
             messages.append(Message(role="tool", tool_call_id=call.id, name=call.name,
                                     content=result[:_MAX_TOOL_RESULT]))
+            if call.name == "note":
+                notes.append(str(call.arguments.get("content") or call.arguments.get("title") or "").strip())
             if tool.lifecycle:
                 lifecycle = True
-                last_summary = str(call.arguments.get("summary", last_summary))
+                last_summary = str(call.arguments.get("summary", "")).strip()
 
         if lifecycle:
             emit("status", "assessment finished by agent")
-            return last_summary
+            return _finalize(last_summary, notes, emit)
 
     emit("status", "max turns reached — requesting final summary")
     try:
@@ -86,5 +89,15 @@ async def run_single_agent(
             last_summary = final.content.strip()
     except Exception as e:  # summary is best-effort
         emit("log", f"summary generation failed: {type(e).__name__}: {e}")
-    emit("finish", last_summary[:1000])
-    return last_summary
+    return _finalize(last_summary, notes, emit)
+
+
+def _finalize(summary: str, notes: list[str], emit: Emitter) -> str:
+    """Always yield a usable summary: the model's, else a digest of the notes it took."""
+    summary = (summary or "").strip()
+    if not summary and notes:
+        kept = [n for n in notes if n]
+        summary = "Summary assembled from recorded notes:\n- " + "\n- ".join(kept)
+    summary = summary or "No summary produced (the agent recorded no notes)."
+    emit("finish", summary[:1000])
+    return summary

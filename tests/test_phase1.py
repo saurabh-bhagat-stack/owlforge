@@ -163,3 +163,30 @@ def test_resolve_context_window_override_and_fallback():
     cfg.llm.base_url = "http://127.0.0.1:59999/v1"
     val, source = resolve_context_window(cfg)
     assert val == 8192 and source == "fallback default"
+
+
+class _NotesNoSummaryClient:
+    """Records a note each turn, never finishes, and returns empty on the summarize call."""
+
+    def chat(self, messages, tools=None, *, temperature=None, max_tokens=None) -> AssistantTurn:
+        if not tools:
+            return AssistantTurn(content="")  # model won't summarize
+        return AssistantTurn(content="noting",
+                             tool_calls=[ToolCall(id="n", name="note",
+                                                  arguments={"title": "t", "content": "port 443 open"})])
+
+
+def test_summary_falls_back_to_notes():
+    async def _note(args, ctx):
+        return "saved"
+
+    reg = ToolRegistry()
+    reg.add(Tool(name="note", description="n", parameters={"type": "object", "properties": {}}, run=_note))
+    summary = asyncio.run(
+        run_single_agent(
+            client=_NotesNoSummaryClient(), registry=reg, emit=Emitter("asmt_nf", persist=False),
+            assessment_id="asmt_nf", target="https://example.test", instructions="x",
+            scan_mode="quick", max_turns=2,
+        )
+    )
+    assert "port 443 open" in summary
