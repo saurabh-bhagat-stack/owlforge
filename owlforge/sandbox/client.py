@@ -49,3 +49,16 @@ class SandboxClient:
             duration_ms=d["duration_ms"], timed_out=d.get("timed_out", False),
             truncated=d.get("truncated", False),
         )
+
+    def proxy_flows(self, limit: int = 100) -> list[dict]:
+        try:
+            r = httpx.get(
+                f"{self.base_url}/proxy/flows",
+                headers=self._headers(),
+                params={"limit": limit},
+                timeout=15.0,
+            )
+            r.raise_for_status()
+            return r.json().get("flows", [])
+        except Exception:
+            return []

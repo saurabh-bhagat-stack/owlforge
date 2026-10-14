@@ -67,6 +67,24 @@ async def _exec_command(args: dict[str, Any], ctx: ToolContext) -> str:
     return f"{head}\n{body}"
 
 
+async def _list_requests(args: dict[str, Any], ctx: ToolContext) -> str:
+    if ctx.sandbox is None:
+        return "error: no sandbox available."
+    import asyncio
+
+    limit = int(args.get("limit", 50))
+    flows = await asyncio.to_thread(ctx.sandbox.proxy_flows, limit)
+    if not flows:
+        return ("No captured requests yet. Traffic from exec_command tools (curl/httpx/"
+                "nuclei) is proxied and captured — run some first, then list again.")
+    lines = [
+        f"{f.get('status')} {f.get('method')} {f.get('url')} "
+        f"[{f.get('content_type', '')}, {f.get('resp_len', 0)}b]"
+        for f in flows
+    ]
+    return "\n".join(lines)
+
+
 async def _finish(args: dict[str, Any], ctx: ToolContext) -> str:
     summary = str(args.get("summary", "")).strip()
     ctx.emit("finish", summary[:1000])
@@ -126,5 +144,12 @@ def build_registry(with_sandbox: bool = False) -> ToolRegistry:
                 "required": ["command"],
             },
             run=_exec_command,
+        ))
+        reg.add(Tool(
+            name="list_requests",
+            description=("List HTTP requests/responses captured by the sandbox proxy "
+                         "(method, URL, status, type, size). Use after running tools."),
+            parameters={"type": "object", "properties": {"limit": {"type": "number"}}},
+            run=_list_requests,
         ))
     return reg

@@ -15,6 +15,7 @@ else on the host. Streaming output and long-running processes come in a later pa
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import time
 
@@ -112,3 +113,21 @@ def read_file(path: str = Query(...)) -> dict:
         raise HTTPException(status_code=404, detail="not found") from None
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e)) from None
+
+
+@app.get("/proxy/flows", dependencies=[Depends(auth)])
+def proxy_flows(limit: int = Query(100)) -> dict:
+    """Return the most recent captured HTTP flows (from the mitmproxy addon)."""
+    path = os.environ.get("OWLFORGE_FLOWLOG", os.path.join(WORKSPACE, ".owlforge/flows.jsonl"))
+    flows: list[dict] = []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            lines = fh.readlines()[-max(1, limit):]
+        for ln in lines:
+            try:
+                flows.append(json.loads(ln))
+            except Exception:
+                pass
+    except FileNotFoundError:
+        pass
+    return {"flows": flows, "count": len(flows)}
