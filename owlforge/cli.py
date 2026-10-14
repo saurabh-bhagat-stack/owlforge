@@ -66,11 +66,15 @@ def run(
     mode: str = typer.Option("standard", "--mode", help="quick | standard | deep"),
     message: str = typer.Option(..., "--message", "-m", help="Plain-language assessment instructions."),
     max_turns: int = typer.Option(20, "--max-turns", help="Max agent turns."),
+    model: str = typer.Option(None, "--model", help="Override the configured model id (e.g. saluki-27b:latest)."),
 ) -> None:
     """Start an assessment and run the Phase 1 single-agent loop against a local model."""
     import asyncio
 
     cfg = load_config()
+    if model:
+        cfg = cfg.model_copy(deep=True)
+        cfg.llm.model = model
     target = target or cfg.testing.default_target
     init_db()
 
