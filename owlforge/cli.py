@@ -85,6 +85,7 @@ def run(
     login_success: str = typer.Option(None, "--login-success", help="Substring indicating a successful login."),
     recon: bool = typer.Option(True, "--recon/--no-recon", help="Deterministic recon before testing."),
     recon_pages: int = typer.Option(25, "--recon-pages", help="Max pages to crawl during recon."),
+    network_recon: bool = typer.Option(False, "--network-recon", help="Also run port/service discovery (nmap)."),
 ) -> None:
     """Start an assessment and run the single-agent loop, with the sandbox if available."""
     import asyncio
@@ -186,7 +187,7 @@ def run(
         from owlforge.engine.recon import recon_phase
         try:
             surface_text = recon_phase(aid, target, session_headers, sandbox_client,
-                                       max_pages=recon_pages,
+                                       max_pages=recon_pages, network_recon_enabled=network_recon,
                                        log=lambda m: console.print(f"[dim]\[recon] {m}[/]"))
             if surface_text:
                 console.print(f"[dim]\[recon] surface inventory:\n{surface_text[:700]}[/]")

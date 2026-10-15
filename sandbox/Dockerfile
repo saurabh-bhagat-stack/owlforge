@@ -47,5 +47,6 @@ COPY mitm /opt/owlforge/mitm-addons
 COPY entrypoint.sh /opt/owlforge/entrypoint.sh
 RUN chmod +x /opt/owlforge/entrypoint.sh && mkdir -p /workspace
 
+COPY wordlists /opt/owlforge/wordlists
 EXPOSE 47130
 ENTRYPOINT ["/opt/owlforge/entrypoint.sh"]

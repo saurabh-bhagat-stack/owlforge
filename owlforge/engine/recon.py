@@ -120,6 +120,7 @@ def recon_phase(
     session_headers: dict | None,
     sandbox_client,
     max_pages: int = 25,
+    network_recon_enabled: bool = False,
     log: Callable[[str], None] = lambda m: None,
 ) -> str:
     """Run deterministic recon, persist the inventory, return it rendered for the prompt."""
@@ -140,5 +141,92 @@ def recon_phase(
             return {"error": str(e)}
 
     inv = crawl(target, request_fn, max_pages=max_pages, log=log)
+    inv += content_discovery(target, sandbox_client, session_headers, log=log)
+    inv = _dedup(inv)
     persist(assessment_id, inv)
-    return render_inventory(inv)
+
+    fp = fingerprint(target, request_fn)
+    header = f"Fingerprint: server={fp.get('server') or '?'}; tech={', '.join(fp.get('tech') or []) or '?'}"
+    text = header + "\n\n" + render_inventory(inv)
+
+    if network_recon_enabled:
+        net = network_recon(target, sandbox_client, log=log)
+        if net.strip():
+            text += "\n\n# Network recon (nmap, optional)\n" + net.strip()[:1500]
+    return text
+
+WORDLIST = "/opt/owlforge/wordlists/common.txt"
+_MATCH_CODES = "200,204,301,302,307,308,401,403,405"
+
+
+def fingerprint(target: str, request_fn: RequestFn) -> dict:
+    """Cheap HTTP fingerprint (mandatory): server + framework hints from the response."""
+    r = request_fn("GET", target) or {}
+    h = {k.lower(): v for k, v in (r.get("headers") or {}).items()}
+    body = (r.get("body") or "").lower()
+    sigs = [("React", "react"), ("Next.js", "/_next/"), ("Angular", "ng-app"),
+            ("Angular", "angular"), ("Vue", "vue.js"), ("GraphQL", "graphql"),
+            ("WordPress", "wp-content"), ("jQuery", "jquery")]
+    tech = sorted({name for name, sig in sigs if sig in body})
+    return {
+        "server": h.get("server", ""),
+        "x_powered_by": h.get("x-powered-by", ""),
+        "via": h.get("via", ""),
+        "tech": tech,
+    }
+
+
+def content_discovery(
+    target: str,
+    sandbox_client,
+    session_headers: dict | None = None,
+    wordlist: str = WORDLIST,
+    log: Callable[[str], None] = lambda m: None,
+) -> list[dict]:
+    """Brute-force hidden/unlinked paths with ffuf (in-sandbox). Finds what the crawler
+    can't — content that isn't linked. Carries the auth session when present."""
+    if sandbox_client is None:
+        log("content discovery skipped (no sandbox)")
+        return []
+    base = target.rstrip("/")
+    hdr = "".join(f" -H '{k}: {v}'" for k, v in (session_headers or {}).items())
+    cmd = (
+        f"ffuf -u {base}/FUZZ -w {wordlist} -mc {_MATCH_CODES} -t 40 -s "
+        f"-of json -o /workspace/ffuf.json{hdr} >/dev/null 2>&1; cat /workspace/ffuf.json 2>/dev/null"
+    )
+    try:
+        r = sandbox_client.exec(cmd, timeout_ms=180_000)
+        import json
+        data = json.loads(r.stdout or "{}")
+    except Exception as e:
+        log(f"content discovery error: {e}")
+        return []
+    from urllib.parse import urlparse
+    out = []
+    for res in data.get("results", []) or []:
+        u = res.get("url", "")
+        if not u:
+            continue
+        pr = urlparse(u)
+        out.append({"url": f"{pr.scheme}://{pr.netloc}{pr.path}", "method": "GET",
+                    "params": [], "source": "content-discovery", "status": res.get("status")})
+    log(f"content discovery: {len(out)} hidden path(s)")
+    return out
+
+
+def network_recon(target: str, sandbox_client, log: Callable[[str], None] = lambda m: None) -> str:
+    """OPTIONAL (scope-gated): port/service discovery via nmap. Off by default."""
+    if sandbox_client is None:
+        return ""
+    from urllib.parse import urlparse
+    host = urlparse(target).netloc.split(":")[0]
+    try:
+        r = sandbox_client.exec(
+            f"nmap -Pn -T4 --top-ports 200 -sV {host} 2>&1 | grep -E '^[0-9]+/|Nmap scan' | head -40",
+            timeout_ms=240_000,
+        )
+        log("network recon (nmap) done")
+        return r.stdout or ""
+    except Exception as e:
+        log(f"network recon error: {e}")
+        return ""
