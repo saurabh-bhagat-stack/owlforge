@@ -59,3 +59,25 @@ def test_recon_extracts_params_and_forms_same_origin_only():
     assert ("POST", "https://t.test/login", ("password", "username")) in urls
     assert not any("evil.com" in i["url"] for i in items)                # same-origin only
     assert "category" in render_inventory(items)
+
+
+def test_orchestrator_plans_tasks_from_surface():
+    from owlforge.engine.classify import OBJECT_ID, PATH, SQLI, SSRF, XSS, classify_param
+    from owlforge.engine.orchestrator import plan_tasks
+
+    # param classification
+    assert {SQLI, XSS} <= classify_param("searchTerm")
+    assert OBJECT_ID in classify_param("productId")
+    assert SSRF in classify_param("redirectUrl")
+    assert PATH in classify_param("file")
+
+    inv = [
+        {"url": "https://t/catalog", "method": "GET", "params": ["category"], "source": "link"},
+        {"url": "https://t/product", "method": "GET", "params": ["productId"], "source": "link"},
+        {"url": "https://t/admin", "method": "GET", "params": [], "source": "content-discovery"},
+    ]
+    tasks = plan_tasks(inv)
+    # category -> sqli+xss ; productId -> sqli+xss+access_control ; /admin (no params, interesting) -> access_control
+    assert any(t["param"] == "category" for t in tasks[SQLI])
+    assert any(t["param"] == "productId" for t in tasks[OBJECT_ID])
+    assert any(t["url"].endswith("/admin") and t["param"] is None for t in tasks[OBJECT_ID])

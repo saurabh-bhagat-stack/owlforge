@@ -86,6 +86,7 @@ def run(
     recon: bool = typer.Option(True, "--recon/--no-recon", help="Deterministic recon before testing."),
     recon_pages: int = typer.Option(25, "--recon-pages", help="Max pages to crawl during recon."),
     network_recon: bool = typer.Option(False, "--network-recon", help="Also run port/service discovery (nmap)."),
+    orchestrate: bool = typer.Option(False, "--orchestrate", help="Multi-agent: plan + dispatch specialists."),
 ) -> None:
     """Start an assessment and run the single-agent loop, with the sandbox if available."""
     import asyncio
@@ -200,13 +201,22 @@ def run(
     summary = ""
     report_path = None
     try:
-        summary = asyncio.run(
-            run_single_agent(
-                client=client, registry=registry, emit=emit, assessment_id=aid,
-                target=target, instructions=message, scan_mode=mode, max_turns=max_turns,
-                sandbox=sandbox_client,
+        if orchestrate:
+            from owlforge.engine.orchestrator import run_orchestrated
+            summary = asyncio.run(run_orchestrated(
+                assessment_id=aid, client=client, sandbox=sandbox_client, emit=emit,
+                session_headers=session_headers, scan_mode=mode, target=target,
+                max_turns=max(6, max_turns // 2),
+            ))
+        else:
+            summary = asyncio.run(
+                run_single_agent(
+                    client=client, registry=registry, emit=emit, assessment_id=aid,
+                    target=target, instructions=message, scan_mode=mode, max_turns=max_turns,
+                    sandbox=sandbox_client, session_headers=session_headers,
+                    surface=surface_text or None,
+                )
             )
-        )
         emit("status", "validation phase")
         vcounts = asyncio.run(validate_findings(assessment_id=aid, sandbox=sandbox_client, emit=emit))
         emit("status", f"validation — {vcounts['validated']} validated, "
