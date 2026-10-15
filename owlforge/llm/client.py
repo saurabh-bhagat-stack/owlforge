@@ -16,7 +16,7 @@ import json
 import time
 
 from owlforge.llm.base import AssistantTurn, LLMClient, Message, ToolCall, ToolSpec
-from owlforge.llm.context import trim_messages
+from owlforge.llm.context import compact_messages
 from owlforge.llm.toolproto import parse_tool_calls, render_tool_protocol
 
 
@@ -112,7 +112,7 @@ class OpenAICompatClient(LLMClient):
     ) -> AssistantTurn:
         tools = tools or []
         max_tokens = max_tokens or 1024
-        msgs = trim_messages(messages, self.context_window, reserve_for_output=max_tokens)
+        msgs = compact_messages(messages, self.context_window, reserve_for_output=max_tokens)
 
         use_native = self.tool_mode in {"auto", "native"} and bool(tools)
 

@@ -240,3 +240,24 @@ def test_parse_concatenated_tool_objects_takes_first():
               '"params": {"q": "<script>alert(1)</script>"}}}')
     _, calls = parse_tool_calls(concat, {"think", "http_request", "finish"})
     assert len(calls) == 1 and calls[0].name == "think"
+
+
+def test_compaction_digests_dropped_turns_and_pins_task():
+    from owlforge.llm.base import Message, ToolCall
+    from owlforge.llm.context import compact_messages
+
+    msgs = [Message(role="system", content="SYS")]
+    msgs.append(Message(role="user", content="THE TASK: assess the target"))
+    for i in range(40):
+        msgs.append(Message(role="assistant", content="",
+                            tool_calls=[ToolCall(id=f"c{i}", name="http_request",
+                                                 arguments={"url": f"https://t/p{i}"})]))
+        msgs.append(Message(role="tool", tool_call_id=f"c{i}", name="http_request", content="X" * 1500))
+
+    out = compact_messages(msgs, context_window=4096, reserve_for_output=1024)
+    assert out[0].role == "system"
+    assert any(m.role == "user" and "THE TASK" in (m.content or "") for m in out)   # task pinned
+    assert any("compacted memory" in (m.content or "") for m in out)                # digest present
+    first_non_sys = next(m for m in out if m.role != "system")
+    assert first_non_sys.role == "user"                                             # no orphan tool at front
+    assert len(out) < len(msgs)                                                      # actually compacted
