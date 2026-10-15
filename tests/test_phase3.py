@@ -162,3 +162,31 @@ def test_access_control_finding_not_auto_validated(isolated):
     with isolated.session() as s:
         f = s.get(Finding, fid)
         assert f.status == "candidate" and "differential" in f.validation_note.lower()
+
+
+def test_migration_adds_missing_column(tmp_path, monkeypatch):
+    monkeypatch.setenv("OWLFORGE_HOME", str(tmp_path))
+    import importlib
+
+    import owlforge.config as config
+    importlib.reload(config)
+    import owlforge.store.db as db
+    importlib.reload(db)
+    from sqlalchemy import text
+
+    db._engine = None
+    db.init_db()
+    # simulate an OLD schema: drop a column by recreating a stripped finding table is hard;
+    # instead, add then verify idempotency + that a known new column exists after migrate.
+    with db.get_engine().begin() as conn:
+        cols = [r[1] for r in conn.execute(text("PRAGMA table_info('finding')")).all()]
+    assert "repro_command" in cols and "success_signal" in cols and "validation_note" in cols
+    # simulate stale table missing 'validation_note'
+    with db.get_engine().begin() as conn:
+        conn.execute(text("ALTER TABLE finding DROP COLUMN validation_note"))
+        cols2 = [r[1] for r in conn.execute(text("PRAGMA table_info('finding')")).all()]
+    assert "validation_note" not in cols2
+    db.init_db()  # migration should re-add it
+    with db.get_engine().begin() as conn:
+        cols3 = [r[1] for r in conn.execute(text("PRAGMA table_info('finding')")).all()]
+    assert "validation_note" in cols3
