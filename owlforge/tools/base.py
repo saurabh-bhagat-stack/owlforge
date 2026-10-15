@@ -18,6 +18,7 @@ class ToolContext:
     target: str
     emit: Callable[..., None]
     sandbox: SandboxClient | None = None  # set when a sandbox container is up
+    session_headers: dict = field(default_factory=dict)  # auth headers for every http_request
 
 
 ToolFn = Callable[[dict[str, Any], ToolContext], Awaitable[str]]

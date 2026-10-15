@@ -50,7 +50,7 @@ async def _http_request(args: dict[str, Any], ctx: ToolContext) -> str:
         return "error: 'url' is required"
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
-    headers = args.get("headers") or None
+    headers = {**(ctx.session_headers or {}), **(args.get("headers") or {})} or None
     params = _normalize_params(args.get("params") or None)
     body = args.get("body")
     ctx.emit("tool_call", f"http_request {method} {url}")

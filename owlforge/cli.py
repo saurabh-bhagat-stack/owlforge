@@ -78,6 +78,11 @@ def run(
     max_turns: int = typer.Option(20, "--max-turns", help="Max agent turns."),
     model: str = typer.Option(None, "--model", help="Override the configured model id (e.g. saluki-27b:latest)."),
     no_sandbox: bool = typer.Option(False, "--no-sandbox", help="Skip the sandbox even if configured."),
+    auth_cookie: str = typer.Option(None, "--auth-cookie", help="Cookie for authenticated recon, e.g. 'session=abc'."),
+    auth_header: str = typer.Option(None, "--auth-header", help="Extra header 'Name: Value'."),
+    login_url: str = typer.Option(None, "--login-url", help="Form-login URL (authenticated mode)."),
+    login_data: str = typer.Option(None, "--login-data", help="urlencoded login fields, e.g. 'username=a&password=b'."),
+    login_success: str = typer.Option(None, "--login-success", help="Substring indicating a successful login."),
 ) -> None:
     """Start an assessment and run the single-agent loop, with the sandbox if available."""
     import asyncio
@@ -130,6 +135,38 @@ def run(
                 console.print(f"[red]sandbox start failed:[/] {e}")
                 console.print("[yellow]running without exec_command[/]")
 
+    # --- authentication (unauth | session | login) ---
+    from urllib.parse import parse_qsl
+
+    from owlforge.engine.auth import AuthContext, establish_session
+
+    _extra: dict[str, str] = {}
+    if auth_header and ":" in auth_header:
+        _hk, _hv = auth_header.split(":", 1)
+        _extra[_hk.strip()] = _hv.strip()
+    if auth_cookie:
+        _extra["Cookie"] = auth_cookie
+    session_headers: dict[str, str] = {}
+    if login_url:
+        _auth = AuthContext(mode="login", headers=_extra, login_url=login_url,
+                            login_params=dict(parse_qsl(login_data or "")), login_success=login_success)
+    elif _extra:
+        _auth = AuthContext(mode="session", headers=_extra)
+    else:
+        _auth = AuthContext(mode="unauth")
+
+    if _auth.mode != "unauth":
+        def _reqfn(method, url, headers=None, params=None, body=None):
+            import httpx
+            try:
+                r = httpx.request(method, url, headers=headers, params=params, content=body,
+                                  follow_redirects=False, timeout=20.0)
+                return {"status": r.status_code, "headers": dict(r.headers), "body": r.text}
+            except Exception as e:
+                return {"error": str(e)}
+        session_headers = establish_session(_auth, _reqfn, log=lambda m: console.print(f"[dim]\[auth] {m}[/]"))
+        console.print(f"[dim]auth mode={_auth.mode}, session {'established' if session_headers else 'empty'}[/]")
+
     panel = [
         f"id:      [bold cyan]{aid}[/]",
         f"project: {project}",
@@ -137,6 +174,7 @@ def run(
         f"model:   {cfg.llm.model} @ {cfg.llm.base_url}",
         f"context: {client.context_window} ({client.context_source})",
         f"sandbox: {'on' if sandbox_client else 'off'}",
+        f"auth:    {_auth.mode}",
         f"mode:    {mode}",
     ]
     console.print(Panel.fit(chr(10).join(panel), title="assessment started", border_style="cyan"))
