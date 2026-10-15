@@ -48,7 +48,7 @@ def test_validation_promotes_on_signal_rejects_without_and_manual_without_repro(
                repro_command="curl .../?file=/etc/passwd", success_signal="root:x:0:0")
     bad = _mk(isolated, id="f_bad", title="maybe xss", severity="low",
               repro_command="curl ...", success_signal="UNIQUE_MARKER_123")
-    manual = _mk(isolated, id="f_manual", title="suspected idor", severity="medium")
+    manual = _mk(isolated, id="f_manual", title="suspected info disclosure", severity="medium")
 
     # sandbox output contains the good signal but not the bad one
     counts = asyncio.run(validate_findings(
@@ -144,3 +144,21 @@ def test_system_prompt_includes_playbooks():
 
     sp = system_prompt("https://t.test", "assess it", "standard")
     assert "Methodology & playbooks" in sp and "SQL injection" in sp
+
+
+def test_access_control_finding_not_auto_validated(isolated):
+    import asyncio
+
+    from owlforge.engine.validate import validate_findings
+    from owlforge.store.models import Finding
+
+    fid = _mk(isolated, id="f_idor", title="Broken Access Control / IDOR on products",
+              severity="high", repro_command="curl .../product?productId=2", success_signal="Cocktail")
+    counts = asyncio.run(validate_findings(
+        assessment_id="asmt_x", sandbox=_FakeSandbox("... Create Your Own Cocktail ..."),
+        emit=Emitter("asmt_x", persist=False)))
+    # signal WOULD be present, but access-control must NOT auto-validate
+    assert counts["validated"] == 0 and counts["manual"] == 1
+    with isolated.session() as s:
+        f = s.get(Finding, fid)
+        assert f.status == "candidate" and "differential" in f.validation_note.lower()

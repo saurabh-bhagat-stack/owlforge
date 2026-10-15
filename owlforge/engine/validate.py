@@ -20,6 +20,17 @@ from owlforge.sandbox.client import SandboxClient
 from owlforge.store.db import session
 from owlforge.store.models import Finding
 
+_ACCESS_KEYWORDS = ("idor", "access control", "access-control", "authorization",
+                    "broken access", "bola", "privilege escalation", "unauthor")
+
+
+def _needs_differential(title: str) -> bool:
+    """Access-control/IDOR can't be confirmed by a single successful request — a 200 with
+    content is not proof of a boundary violation. These need differential testing
+    (authorized vs unauthorized, or two accounts), which the signal gate cannot do."""
+    t = (title or "").lower()
+    return any(k in t for k in _ACCESS_KEYWORDS)
+
 
 async def validate_findings(
     *, assessment_id: str, sandbox: SandboxClient | None, emit: Emitter
@@ -34,6 +45,12 @@ async def validate_findings(
 
     counts = {"validated": 0, "rejected": 0, "manual": 0}
     for fid, repro, signal, title in items:
+        if _needs_differential(title):
+            _set(fid, "candidate", note=("access-control/IDOR needs differential testing "
+                 "(authorized vs unauthorized / two accounts) — not auto-validated on a single request"))
+            counts["manual"] += 1
+            emit("log", f"access-control finding kept as candidate (needs differential): {title}")
+            continue
         if not repro.strip():
             _set(fid, "candidate", note="no repro_command supplied — manual validation required")
             counts["manual"] += 1
