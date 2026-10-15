@@ -34,6 +34,27 @@ _HINT = {
     SSRF: "a URL parameter causing a server-side fetch, or an attacker URL reflected in a redirect/Location",
 }
 _ORDER = [SQLI, XSS, PATH, OBJECT_ID, SSRF]
+_MAX_TARGETS = 8  # per specialist — test the highest-interest first, don't dilute budget
+
+
+def _priority(cls: str, t: dict) -> int:
+    """Interest score (spec §3.3): test the most promising targets first."""
+    p = (t.get("param") or "").lower()
+    url = t["url"].lower()
+    if cls in (SQLI, XSS):
+        if any(k in p for k in ("category", "filter", "search", "query", "term",
+                                "keyword", "sort", "name", "title", "q")):
+            return 3  # free-text / filter params — most likely injectable
+        if any(k in p for k in ("id", "pid", "productid", "postid", "uid")):
+            return 1  # ids are often int-validated (low yield for sqli/xss)
+        return 2
+    if cls == OBJECT_ID:
+        if t.get("param") is None and any(k in url for k in ("admin", "internal", "debug")):
+            return 3
+        if any(k in p for k in ("id", "pid", "uid", "productid", "postid", "orderid")):
+            return 3
+        return 1
+    return 2
 
 
 def read_blackboard(assessment_id: str) -> list[dict]:
@@ -94,7 +115,8 @@ async def run_orchestrated(
         targets = tasks.get(cls)
         if not targets:
             continue
-        emit("status", f"[specialist:{cls}] testing {len(targets)} target(s)")
+        targets = sorted(targets, key=lambda t: _priority(cls, t), reverse=True)[:_MAX_TARGETS]
+        emit("status", f"[specialist:{cls}] testing {len(targets)} target(s) (highest-interest first)")
         instr = (
             f"You are a {_TITLE[cls]} specialist. Test ONLY for {_TITLE[cls]} on the targets below — "
             f"nothing else. Signal of success: {_HINT[cls]}. Use http_request (put RAW payloads in "

@@ -81,3 +81,14 @@ def test_orchestrator_plans_tasks_from_surface():
     assert any(t["param"] == "category" for t in tasks[SQLI])
     assert any(t["param"] == "productId" for t in tasks[OBJECT_ID])
     assert any(t["url"].endswith("/admin") and t["param"] is None for t in tasks[OBJECT_ID])
+
+
+def test_orchestrator_prioritizes_free_text_params_for_sqli():
+    from owlforge.engine.classify import OBJECT_ID, SQLI
+    from owlforge.engine.orchestrator import _priority
+
+    # free-text/filter param ranks above an id for injection
+    assert _priority(SQLI, {"url": "https://t/catalog", "param": "category"}) > \
+           _priority(SQLI, {"url": "https://t/product", "param": "productId"})
+    # hidden admin endpoint ranks high for access control
+    assert _priority(OBJECT_ID, {"url": "https://t/admin/users", "param": None}) == 3
