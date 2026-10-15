@@ -86,7 +86,7 @@ def run(
     recon: bool = typer.Option(True, "--recon/--no-recon", help="Deterministic recon before testing."),
     recon_pages: int = typer.Option(25, "--recon-pages", help="Max pages to crawl during recon."),
     network_recon: bool = typer.Option(False, "--network-recon", help="Also run port/service discovery (nmap)."),
-    orchestrate: bool = typer.Option(False, "--orchestrate", help="Multi-agent: plan + dispatch specialists."),
+    orchestrate: bool = typer.Option(True, "--orchestrate/--single", help="Multi-agent default (--single = one agent)"),
 ) -> None:
     """Start an assessment and run the single-agent loop, with the sandbox if available."""
     import asyncio

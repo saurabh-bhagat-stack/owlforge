@@ -101,3 +101,26 @@ def test_recon_captures_param_links_not_in_href():
     html = '<div data-url="/catalog?category=Gifts"></div><script>var u="/catalog?category=Pets"</script>'
     items = _dedup(extract_surface("https://t.test/catalog", html))
     assert any(i["url"] == "https://t.test/catalog" and "category" in i["params"] for i in items)
+
+
+def test_api_spec_discovery_parses_openapi(monkeypatch):
+    import json
+
+    from owlforge.engine.recon import api_spec_discovery
+
+    spec = {"paths": {
+        "/api/users/{id}": {"get": {"parameters": [{"name": "id"}, {"name": "expand"}]},
+                             "delete": {}},
+        "/api/search": {"get": {"parameters": [{"name": "q"}]}},
+    }}
+
+    def fake(method, url, headers=None, params=None, body=None):
+        if url.endswith("/openapi.json"):
+            return {"status": 200, "body": json.dumps(spec), "headers": {}}
+        return {"status": 404, "body": "", "headers": {}}
+
+    out = api_spec_discovery("https://t.test/", fake)
+    urls = {(o["method"], o["url"], tuple(o["params"])) for o in out}
+    assert ("GET", "https://t.test/api/users", ("expand", "id")) in urls
+    assert ("GET", "https://t.test/api/search", ("q",)) in urls
+    assert any(m == "DELETE" for m, _, _ in urls)

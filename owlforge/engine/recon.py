@@ -219,6 +219,8 @@ def recon_phase(
     inv = crawl(target, request_fn, max_pages=max_pages, log=log)
     inv += content_discovery(target, sandbox_client, session_headers, log=log)
     inv += js_recon(target, request_fn, log=log)
+    inv += api_spec_discovery(target, request_fn, log=log)
+    inv += graphql_probe(target, request_fn, log=log)
     inv = _dedup(inv)
     persist(assessment_id, inv)
 
@@ -307,3 +309,62 @@ def network_recon(target: str, sandbox_client, log: Callable[[str], None] = lamb
     except Exception as e:
         log(f"network recon error: {e}")
         return ""
+
+
+_SPEC_PATHS = ["/openapi.json", "/swagger.json", "/openapi.yaml", "/api-docs", "/v2/api-docs",
+               "/swagger/v1/swagger.json", "/api/swagger.json", "/api/openapi.json",
+               "/.well-known/openapi.json", "/api/v1/openapi.json"]
+_GQL_PATHS = ["/graphql", "/api/graphql", "/graphql/v1", "/v1/graphql", "/query"]
+
+
+def api_spec_discovery(target: str, request_fn: RequestFn, log: Callable[[str], None] = lambda m: None) -> list[dict]:
+    """Probe for an OpenAPI/Swagger spec and turn its paths into surface items (spec §1.5)."""
+    import json
+    base = target.rstrip("/")
+    origin = _origin(target)
+    for sp in _SPEC_PATHS:
+        r = request_fn("GET", base + sp) or {}
+        if r.get("status") != 200:
+            continue
+        try:
+            spec = json.loads(r.get("body", "") or "")
+        except Exception:
+            continue
+        paths = spec.get("paths") if isinstance(spec, dict) else None
+        if not isinstance(paths, dict):
+            continue
+        out = []
+        for path, methods in paths.items():
+            if not isinstance(methods, dict):
+                continue
+            for method, op in methods.items():
+                if method.lower() not in ("get", "post", "put", "patch", "delete"):
+                    continue
+                params = []
+                if isinstance(op, dict):
+                    for pr in op.get("parameters", []) or []:
+                        if isinstance(pr, dict) and pr.get("name"):
+                            params.append(str(pr["name"]))
+                clean = origin + ("/" + path.lstrip("/")).split("{")[0].rstrip("/")
+                out.append({"url": clean or origin + "/" + path.lstrip("/"),
+                            "method": method.upper(), "params": sorted(set(params)), "source": "api-spec"})
+        log(f"api spec {sp}: {len(paths)} path(s) -> {len(out)} operation(s)")
+        return out
+    return []
+
+
+def graphql_probe(target: str, request_fn: RequestFn, log: Callable[[str], None] = lambda m: None) -> list[dict]:
+    """Detect a GraphQL endpoint + whether introspection is open (spec §2.11)."""
+    import json
+    base = target.rstrip("/")
+    hdr = {"Content-Type": "application/json"}
+    for gp in _GQL_PATHS:
+        r = request_fn("POST", base + gp, headers=hdr, body=json.dumps({"query": "query{__typename}"})) or {}
+        body = (r.get("body", "") or "")
+        if r.get("status") in (200, 400) and ("__typename" in body or '"data"' in body or '"errors"' in body):
+            intro = request_fn("POST", base + gp, headers=hdr,
+                               body=json.dumps({"query": "query{__schema{queryType{name}}}"})) or {}
+            on = "__schema" in (intro.get("body", "") or "")
+            log(f"graphql endpoint {gp} (introspection {'OPEN' if on else 'closed/unknown'})")
+            return [{"url": _strip(base + gp), "method": "POST", "params": ["query"], "source": "graphql"}]
+    return []
