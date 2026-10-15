@@ -141,3 +141,19 @@ def test_api_spec_discovery_parses_openapi(monkeypatch):
     assert ("GET", "https://t.test/api/users", ("expand", "id")) in urls
     assert ("GET", "https://t.test/api/search", ("q",)) in urls
     assert any(m == "DELETE" for m, _, _ in urls)
+
+
+def test_finish_guard_detects_unfiled_vuln_claim():
+    from owlforge.engine.agent import _claims_unfiled_vuln
+
+    # the real GLM miss: it proved SQLi in a note but finished without create_finding
+    assert _claims_unfiled_vuln(
+        ["Confirmed SQL injection on GET /catalog?category= parameter"],
+        "Found SQL injection on category",
+    ) is True
+    # affirmative phrasings
+    assert _claims_unfiled_vuln(["the endpoint is vulnerable to XSS"], "") is True
+    # negatives must NOT trigger a nudge
+    assert _claims_unfiled_vuln(["No IDOR vulnerability - access restricted"], "") is False
+    assert _claims_unfiled_vuln(["could not confirm any vulnerability"], "") is False
+    assert _claims_unfiled_vuln([], "") is False

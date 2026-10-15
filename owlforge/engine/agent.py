@@ -41,6 +41,8 @@ async def run_single_agent(
     actions: list[str] = []
     idle_nudges = 0
     wrapup_sent = False
+    findings_created = 0
+    finding_nudge_sent = False
 
     for turn in range(1, max_turns + 1):
         emit("status", f"turn {turn}/{max_turns}")
@@ -79,6 +81,8 @@ async def run_single_agent(
                 result = await tool.run(call.arguments, ctx)
             except Exception as e:  # a tool crash must not kill the loop
                 result = f"tool error: {type(e).__name__}: {e}"
+            if call.name == "create_finding" and "filed as candidate" in result:
+                findings_created += 1
             if tool.name not in {"think", "finish"}:
                 emit("tool_result", f"{tool.name} -> {result[:200]}")
             messages.append(Message(role="tool", tool_call_id=call.id, name=call.name,
@@ -94,6 +98,20 @@ async def run_single_agent(
                 last_summary = str(call.arguments.get("summary", "")).strip()
 
         if lifecycle:
+            if (findings_created == 0 and not finding_nudge_sent
+                    and _claims_unfiled_vuln(notes, last_summary)):
+                finding_nudge_sent = True
+                emit("log", "finish called with 0 findings but a vulnerability was "
+                            "described — requiring create_finding before finishing")
+                messages.append(Message(role="user", content=(
+                    "You called `finish` but filed 0 findings, while your notes describe a "
+                    "confirmed vulnerability. A note or a finish summary is NOT a finding and "
+                    "will be discarded. Call `create_finding` NOW for each vulnerability you "
+                    "confirmed, with the structured repro fields: title, severity, repro_url, "
+                    "repro_method, repro_params, and success_signal (the exact observation that "
+                    "proves it, e.g. \"status 500 on category=' while category='' returns 200\"). "
+                    "If on reflection nothing is actually confirmed, call `finish` again.")))
+                continue
             emit("status", "assessment finished by agent")
             return _finalize(last_summary, notes, actions, emit)
 
@@ -115,6 +133,25 @@ async def run_single_agent(
     except Exception as e:  # summary is best-effort
         emit("log", f"summary generation failed: {type(e).__name__}: {e}")
     return _finalize(last_summary, notes, actions, emit)
+
+
+_VULN_CLAIM = ("confirmed", "is vulnerable", "injection on", "exploitable",
+               "successfully inject", "able to inject", "vulnerability confirmed",
+               "is exploitable", "proven")
+_VULN_NEG = ("not confirmed", "unconfirmed", "not vulnerable", "not exploitable",
+             "no vulnerab", "could not confirm", "unable to confirm")
+
+
+def _claims_unfiled_vuln(notes: list[str], summary: str) -> bool:
+    """Did the agent describe a confirmed vulnerability in its notes/summary? If so, a
+    bare `finish` with zero findings is almost certainly a missed create_finding call
+    (the harness nudges it once to file one — robustness for weaker drivers)."""
+    blob = (" ".join(notes) + " " + (summary or "")).lower()
+    if not blob.strip():
+        return False
+    for neg in _VULN_NEG:
+        blob = blob.replace(neg, " ")
+    return any(p in blob for p in _VULN_CLAIM)
 
 
 def _finalize(summary: str, notes: list[str], actions: list[str], emit: Emitter) -> str:
