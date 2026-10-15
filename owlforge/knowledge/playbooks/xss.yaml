@@ -1,0 +1,12 @@
+name: xss
+title: Cross-site scripting (reflected)
+priority: 2
+body: |
+  Surface: any parameter reflected into the response. Test each reflected parameter.
+  Method:
+  - Inject a UNIQUE marker with HTML syntax per parameter, e.g. <xowl>MARK123</xowl>.
+  - Inspect how it reflects: RAW (<xowl>) => injectable; HTML-ENCODED
+    (&lt;xowl&gt;) => sanitized, NOT exploitable — DO NOT file it.
+  - If raw, confirm with a context-appropriate executing payload (HTML body,
+    attribute, or JS-string breakout).
+  File with: the RAW (unencoded) payload present in the response as the success_signal.

@@ -1,0 +1,10 @@
+name: other
+title: Other classes (probe if relevant)
+priority: 4
+body: |
+  - IDOR / access control: change an id (productId, userId, order id) to another
+    value and see if you receive data you should not (compare authenticated vs not).
+  - Command injection: params feeding a shell/ping/lookup — try ; id, | id, `id`,
+    $(id); signal = command output (e.g. uid=) in the response.
+  - Open redirect: redirect/next/url params — set an external URL and check the
+    Location header.

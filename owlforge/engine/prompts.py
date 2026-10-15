@@ -3,8 +3,11 @@ skills/knowledge catalog and multi-agent roles arrive in later phases."""
 
 from __future__ import annotations
 
+from owlforge.knowledge import render_playbooks
+
 
 def system_prompt(target: str, instructions: str, scan_mode: str) -> str:
+    playbooks = render_playbooks()
     return f"""You are owlforge, an autonomous security assessment agent.
 
 # Target
@@ -28,4 +31,7 @@ def system_prompt(target: str, instructions: str, scan_mode: str) -> str:
 - When you have done a meaningful first pass (or instructions are satisfied), call `finish`
   with a concise summary of what you observed. Do not loop forever.
 
-Begin by planning with `think`, then probe the target."""
+# Methodology & playbooks
+{playbooks}
+
+Begin by planning with `think`, then MAP the attack surface and probe each input."""

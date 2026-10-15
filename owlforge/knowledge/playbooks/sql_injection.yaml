@@ -1,0 +1,16 @@
+name: sql_injection
+title: SQL injection
+priority: 1
+body: |
+  Surface: ANY parameter that may reach a SQL query — filters (category), ids
+  (productId, userId), search, sort/order, pagination. Test EACH of them.
+  Method (per parameter):
+  - Baseline: request a normal value; note status code and response length.
+  - Inject a single quote (') into the value. A 500 / error / clearly different
+    response vs the 200 baseline is a strong error-based SQLi signal (the unbalanced
+    quote broke the query).
+  - Confirm SQL context: a balanced quote ('') or a comment ('-- -) should RESTORE the
+    baseline (200). A 200 -> 500 -> 200 pattern confirms injection.
+  - Escalate if needed: boolean (' AND '1'='1 vs ' AND '1'='2), UNION, or time-based.
+  File with: the status/length differential (or a leaked SQL error string) as the
+  success_signal, and a repro_command that demonstrates it.

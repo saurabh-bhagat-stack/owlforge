@@ -1,0 +1,20 @@
+name: methodology
+title: Assessment methodology (read first)
+priority: 0
+body: |
+  Work SYSTEMATICALLY. Do NOT fixate on the most obvious input (e.g. a search box) —
+  that is the single most common reason real bugs are missed.
+
+  1. MAP the attack surface FIRST. Enumerate EVERY input point before testing any:
+     - every query parameter (e.g. category, id, productId, sort, filter, redirect,
+       page, lang), not just one;
+     - path segments; POST form fields; and where relevant headers
+       (User-Agent, Referer, X-Forwarded-For) and cookies.
+     Fetch pages and extract links/forms/params to build this inventory.
+  2. BREADTH BEFORE DEPTH. Touch every parameter once with a quick probe before going
+     deep on any single one. The vulnerable parameter is often NOT the obvious one.
+  3. EVIDENCE ONLY. Base every claim on actual tool output. A payload reflected
+     HTML-ENCODED (e.g. &lt;) is sanitized and NOT exploitable — only raw/executed
+     output counts.
+  4. CONFIRM BEFORE FILING. Reproduce with a minimal request and a success_signal that
+     appears ONLY when the vuln fires. Never file something you could not reproduce.

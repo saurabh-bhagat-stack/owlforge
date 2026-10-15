@@ -1,0 +1,10 @@
+name: path_traversal
+title: Path traversal / local file include
+priority: 3
+body: |
+  Surface: parameters naming files/paths/templates (file, page, template, include,
+  download, lang, path).
+  Method: request traversal payloads (../../../../etc/passwd and encoded variants) and
+  look for file contents in the response.
+  File with: a recognizable file marker as the success_signal, e.g. "root:x:0:0" from
+  /etc/passwd.

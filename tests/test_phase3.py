@@ -124,3 +124,23 @@ def test_normalize_params_prevents_double_encoding():
     assert _normalize_params({"category": "Accessories'"}) == {"category": "Accessories'"}
     # plain values untouched
     assert _normalize_params({"q": "plain"}) == {"q": "plain"}
+
+
+def test_playbooks_teach_enumeration_and_confirmation():
+    from owlforge.knowledge import load_playbooks, render_playbooks
+
+    names = {p["name"] for p in load_playbooks()}
+    assert {"methodology", "sql_injection", "xss", "path_traversal"} <= names
+    text = render_playbooks()
+    # the discovery-gap fix: enumerate ALL params, not just the obvious one
+    assert "EVERY input point" in text
+    assert "BREADTH BEFORE DEPTH" in text
+    # the escaped-reflection lesson
+    assert "HTML-ENCODED" in text and "NOT exploitable" in text
+
+
+def test_system_prompt_includes_playbooks():
+    from owlforge.engine.prompts import system_prompt
+
+    sp = system_prompt("https://t.test", "assess it", "standard")
+    assert "Methodology & playbooks" in sp and "SQL injection" in sp
