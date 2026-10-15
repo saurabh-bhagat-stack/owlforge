@@ -169,7 +169,7 @@ def run(
                 return {"status": r.status_code, "headers": dict(r.headers), "body": r.text}
             except Exception as e:
                 return {"error": str(e)}
-        session_headers = establish_session(_auth, _reqfn, log=lambda m: console.print(f"[dim]\[auth] {m}[/]"))
+        session_headers = establish_session(_auth, _reqfn, log=lambda m: console.print(rf"[dim]\[auth] {m}[/]"))
         console.print(f"[dim]auth mode={_auth.mode}, session {'established' if session_headers else 'empty'}[/]")
 
     panel = [
@@ -191,9 +191,9 @@ def run(
             surface_text = recon_phase(aid, target, session_headers, sandbox_client,
                                        max_pages=recon_pages, network_recon_enabled=network_recon,
                                        browser_recon_enabled=browser_recon,
-                                       log=lambda m: console.print(f"[dim]\[recon] {m}[/]"))
+                                       log=lambda m: console.print(rf"[dim]\[recon] {m}[/]"))
             if surface_text:
-                console.print(f"[dim]\[recon] surface inventory:\n{surface_text[:700]}[/]")
+                console.print(f"[dim]\\[recon] surface inventory:\n{surface_text[:700]}[/]")
         except Exception as e:
             console.print(f"[yellow]recon failed: {e}[/]")
 

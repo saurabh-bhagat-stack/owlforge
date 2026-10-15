@@ -61,6 +61,23 @@ def test_recon_extracts_params_and_forms_same_origin_only():
     assert "category" in render_inventory(items)
 
 
+def test_render_inventory_annotates_classes_and_interest_and_orders():
+    from owlforge.engine.recon import render_inventory
+
+    inv = [
+        {"url": "https://t/about", "method": "GET", "params": [], "source": "link"},
+        {"url": "https://t/catalog", "method": "GET", "params": ["category"], "source": "html"},
+        {"url": "https://t/admin", "method": "GET", "params": [], "source": "content-discovery"},
+    ]
+    out = render_inventory(inv)
+    lines = out.splitlines()
+    assert "classes: sqli, xss" in out
+    assert "!HIGH" in out
+    assert "/catalog" in lines[0]
+    assert "/admin" in lines[1]
+    assert "/about" in lines[2]
+
+
 def test_orchestrator_plans_tasks_from_surface():
     from owlforge.engine.classify import OBJECT_ID, PATH, SQLI, SSRF, XSS, classify_param
     from owlforge.engine.orchestrator import plan_tasks

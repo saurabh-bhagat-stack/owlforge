@@ -13,6 +13,8 @@ import secrets
 from collections.abc import Callable
 from urllib.parse import parse_qs, urljoin, urlparse
 
+from owlforge.engine.classify import classify_param, endpoint_interesting
+
 RequestFn = Callable[..., dict]
 
 
@@ -111,14 +113,41 @@ def persist(assessment_id: str, inventory: list[dict]) -> None:
         s.commit()
 
 
+_HIGH_PARAM = ("category", "filter", "search", "query", "term", "keyword", "sort", "q",
+               "id", "productid", "postid", "userid", "url", "redirect", "file", "path")
+
+
+def _interest(it: dict) -> str:
+    if endpoint_interesting(it.get("url", "")):
+        return "HIGH"
+    for pm in it.get("params", []):
+        if any(k in str(pm).lower() for k in _HIGH_PARAM):
+            return "HIGH"
+    return "med"
+
+
+def _classes(it: dict) -> list[str]:
+    out: set[str] = set()
+    for pm in it.get("params", []):
+        out |= classify_param(pm)
+    return sorted(out)
+
+
 def render_inventory(inventory: list[dict], limit: int = 40) -> str:
-    """Compact inventory text for the testing agent's prompt — params emphasized."""
-    withp = [it for it in inventory if it.get("params")]
-    without = [it for it in inventory if not it.get("params")]
+    """Compact, classified inventory for the agent/report — params + vuln-classes +
+    interest, highest-interest first (spec §3.1/§3.3)."""
+    def _key(it):
+        return (0 if _interest(it) == "HIGH" else 1, 0 if it.get("params") else 1)
+
+    ordered = sorted(inventory, key=_key)
     lines = []
-    for it in (withp + without)[:limit]:
-        p = ", ".join(it["params"]) if it.get("params") else "(no params)"
-        lines.append(f"- {it['method']} {it['url']}  params: {p}  [{it['source']}]")
+    for it in ordered[:limit]:
+        params = it.get("params") or []
+        pstr = ", ".join(params) if params else "(no params)"
+        cls = _classes(it)
+        tag = f"  classes: {', '.join(cls)}" if cls else ""
+        itag = "  !HIGH" if _interest(it) == "HIGH" else ""
+        lines.append(f"- {it['method']} {it['url']}  params: {pstr}{tag}  [{it['source']}]{itag}")
     extra = len(inventory) - min(len(inventory), limit)
     if extra > 0:
         lines.append(f"- … and {extra} more")
