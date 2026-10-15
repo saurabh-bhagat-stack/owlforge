@@ -157,3 +157,29 @@ def test_finish_guard_detects_unfiled_vuln_claim():
     assert _claims_unfiled_vuln(["No IDOR vulnerability - access restricted"], "") is False
     assert _claims_unfiled_vuln(["could not confirm any vulnerability"], "") is False
     assert _claims_unfiled_vuln([], "") is False
+
+
+def test_discover_credentials_finds_bearer_without_leaking_value():
+    from owlforge.engine.recon import discover_credentials
+
+    def reqfn(method, url, headers=None, params=None, body=None):
+        if url.endswith("/static/app.js"):
+            return {"status": 200, "body": 'const h={Authorization:"Bearer abcdefghij0123456789XYZ"};'}
+        return {"status": 404, "body": ""}
+
+    inv = [{"url": "https://t/static/app.js", "method": "GET", "params": [], "source": "js"}]
+    headers, prov = discover_credentials("https://t/", inv, None, reqfn)
+    assert headers.get("Authorization", "").startswith("Bearer ")
+    assert "abcdefghij0123456789XYZ" in headers["Authorization"]
+    # provenance names WHERE, never the secret value
+    assert "app.js" in prov and "abcdefghij0123456789XYZ" not in prov
+
+
+def test_discover_credentials_empty_when_nothing_exposed():
+    from owlforge.engine.recon import discover_credentials
+
+    def reqfn(method, url, headers=None, params=None, body=None):
+        return {"status": 404, "body": ""}
+
+    headers, prov = discover_credentials("https://t/", [], None, reqfn)
+    assert headers == {} and prov == ""

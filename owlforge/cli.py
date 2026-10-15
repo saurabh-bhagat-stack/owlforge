@@ -140,7 +140,7 @@ def run(
                 console.print(f"[red]sandbox start failed:[/] {e}")
                 console.print("[yellow]running without exec_command[/]")
 
-    # --- authentication (unauth | session | login) ---
+    # --- unified recon + auth pipeline: unauth first, auto-escalate to auth ---
     from urllib.parse import parse_qsl
 
     from owlforge.engine.auth import AuthContext, establish_session
@@ -151,26 +151,17 @@ def run(
         _extra[_hk.strip()] = _hv.strip()
     if auth_cookie:
         _extra["Cookie"] = auth_cookie
-    session_headers: dict[str, str] = {}
     if login_url:
-        _auth = AuthContext(mode="login", headers=_extra, login_url=login_url,
-                            login_params=dict(parse_qsl(login_data or "")), login_success=login_success)
+        user_auth = AuthContext(mode="login", headers=_extra, login_url=login_url,
+                                login_params=dict(parse_qsl(login_data or "")), login_success=login_success)
     elif _extra:
-        _auth = AuthContext(mode="session", headers=_extra)
+        user_auth = AuthContext(mode="session", headers=_extra)
     else:
-        _auth = AuthContext(mode="unauth")
+        user_auth = AuthContext(mode="unauth")
 
-    if _auth.mode != "unauth":
-        def _reqfn(method, url, headers=None, params=None, body=None):
-            import httpx
-            try:
-                r = httpx.request(method, url, headers=headers, params=params, content=body,
-                                  follow_redirects=False, timeout=20.0)
-                return {"status": r.status_code, "headers": dict(r.headers), "body": r.text}
-            except Exception as e:
-                return {"error": str(e)}
-        session_headers = establish_session(_auth, _reqfn, log=lambda m: console.print(rf"[dim]\[auth] {m}[/]"))
-        console.print(f"[dim]auth mode={_auth.mode}, session {'established' if session_headers else 'empty'}[/]")
+    auth_intent = ("operator login" if user_auth.mode == "login"
+                   else "operator session" if user_auth.mode == "session"
+                   else "unauth -> auto-escalate if creds found")
 
     panel = [
         f"id:      [bold cyan]{aid}[/]",
@@ -179,24 +170,37 @@ def run(
         f"model:   {cfg.llm.model} @ {cfg.llm.base_url}",
         f"context: {client.context_window} ({client.context_source})",
         f"sandbox: {'on' if sandbox_client else 'off'}",
-        f"auth:    {_auth.mode}",
+        f"auth:    {auth_intent}",
         f"mode:    {mode}",
     ]
     console.print(Panel.fit(chr(10).join(panel), title="assessment started", border_style="cyan"))
 
     surface_text = ""
+    session_headers: dict[str, str] = {}
     if recon:
-        from owlforge.engine.recon import recon_phase
+        from owlforge.engine.recon import run_recon
         try:
-            surface_text = recon_phase(aid, target, session_headers, sandbox_client,
-                                       max_pages=recon_pages, network_recon_enabled=network_recon,
-                                       browser_recon_enabled=browser_recon,
-                                       log=lambda m: console.print(rf"[dim]\[recon] {m}[/]"))
+            surface_text, session_headers, auth_summary = run_recon(
+                aid, target, sandbox_client, user_auth=user_auth, max_pages=recon_pages,
+                network_recon_enabled=network_recon, browser_recon_enabled=browser_recon,
+                log=lambda m: console.print(rf"[dim]\[recon] {m}[/]"))
+            console.print(rf"[dim]\[auth] {auth_summary}[/]")
             if surface_text:
                 console.print(f"[dim]\\[recon] surface inventory:\n{surface_text[:700]}[/]")
         except Exception as e:
             console.print(f"[yellow]recon failed: {e}[/]")
-
+    elif user_auth.mode != "unauth":
+        # recon disabled, but still honor operator credentials for the hunt
+        def _reqfn(method, url, headers=None, params=None, body=None):
+            import httpx
+            try:
+                r = httpx.request(method, url, headers=headers, params=params, content=body,
+                                  follow_redirects=False, timeout=20.0)
+                return {"status": r.status_code, "headers": dict(r.headers), "body": r.text}
+            except Exception as e:
+                return {"error": str(e)}
+        session_headers = establish_session(
+            user_auth, _reqfn, log=lambda m: console.print(rf"[dim]\[auth] {m}[/]"))
     emit = Emitter(aid, console=console)
     registry = build_registry(with_sandbox=sandbox_client is not None)
     status = "completed"

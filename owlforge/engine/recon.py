@@ -219,17 +219,18 @@ def js_recon(
     return endpoints
 
 
-def recon_phase(
+def _collect_surface(
     assessment_id: str,
     target: str,
     session_headers: dict | None,
     sandbox_client,
+    *,
     max_pages: int = 25,
-    network_recon_enabled: bool = False,
     browser_recon_enabled: bool = False,
     log: Callable[[str], None] = lambda m: None,
-) -> str:
-    """Run deterministic recon, persist the inventory, return it rendered for the prompt."""
+) -> tuple[list[dict], str]:
+    """Build (but DO NOT persist) the surface inventory for one pass, plus a
+    fingerprint header line. Honors session_headers for an authenticated pass."""
 
     def request_fn(method, url, headers=None, params=None, body=None):
         hdrs = {**(session_headers or {}), **(headers or {})} or None
@@ -255,17 +256,163 @@ def recon_phase(
         _pages = [it["url"] for it in inv if it.get("source") in ("link", "content-discovery")][:6]
         inv += browser_recon(target, sandbox_client, pages=_pages, session_headers=session_headers, log=log)
     inv = _dedup(inv)
-    persist(assessment_id, inv)
 
     fp = fingerprint(target, request_fn)
     header = f"Fingerprint: server={fp.get('server') or '?'}; tech={', '.join(fp.get('tech') or []) or '?'}"
-    text = header + "\n\n" + render_inventory(inv)
+    return inv, header
 
+
+def recon_phase(
+    assessment_id: str,
+    target: str,
+    session_headers: dict | None,
+    sandbox_client,
+    max_pages: int = 25,
+    network_recon_enabled: bool = False,
+    browser_recon_enabled: bool = False,
+    log: Callable[[str], None] = lambda m: None,
+) -> str:
+    """Single-pass recon: collect, persist, render. (See run_recon for the
+    unauth -> auto-escalate -> auth pipeline.)"""
+    inv, header = _collect_surface(
+        assessment_id, target, session_headers, sandbox_client,
+        max_pages=max_pages, browser_recon_enabled=browser_recon_enabled, log=log)
+    persist(assessment_id, inv)
+    text = header + "\n\n" + render_inventory(inv)
     if network_recon_enabled:
         net = network_recon(target, sandbox_client, log=log)
         if net.strip():
             text += "\n\n# Network recon (nmap, optional)\n" + net.strip()[:1500]
     return text
+
+
+# Credential patterns scanned in UNAUTH artifacts (JS bundles, exposed files).
+# Secret VALUES are never logged or returned — only their provenance (where found).
+_CRED_PATTERNS = [
+    ("bearer", re.compile(r"""[Aa]uthorization["']?\s*[:=]\s*["']?Bearer\s+([A-Za-z0-9._\-]{20,})""")),
+    ("jwt", re.compile(r"\b(eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,})\b")),
+    ("basic_url", re.compile(r"""https?://([^/\s:@"']{1,64}):([^/\s@"']{1,64})@""")),
+    ("api_key", re.compile(r"""(?:api[_-]?key|x-api-key|apikey)["']?\s*[:=]\s*["']([A-Za-z0-9._\-]{16,})["']""", re.I)),
+]
+_EXPOSED_FILES = (".env", "config.json", "config.js", ".git/config", "credentials.json",
+                  "secrets.json", "backup.sql", ".aws/credentials")
+
+
+def discover_credentials(
+    target: str,
+    inventory: list[dict],
+    sandbox_client,
+    request_fn: RequestFn,
+    log: Callable[[str], None] = lambda m: None,
+) -> tuple[dict, str]:
+    """Scan unauth recon artifacts (JS bundles + common exposed files) for leaked
+    credentials. Returns (session_headers, provenance). Conservative: only a
+    high-confidence hit escalates. Secret values are never logged/returned."""
+    import base64 as _b64
+
+    base = target.rstrip("/")
+    candidates = [base + "/" + f for f in _EXPOSED_FILES]
+    candidates += [it["url"] for it in inventory if it.get("url", "").endswith(".js")][:8]
+
+    for url in candidates:
+        try:
+            r = request_fn("GET", url) or {}
+        except Exception:
+            continue
+        if r.get("error") or int(r.get("status") or 0) >= 400:
+            continue
+        body = r.get("body") or ""
+        if not body:
+            continue
+        where = urlparse(url).path or url
+        for kind, pat in _CRED_PATTERNS:
+            m = pat.search(body)
+            if not m:
+                continue
+            if kind in ("bearer", "jwt"):
+                log(f"discovered bearer/JWT credential in {where}")
+                return {"Authorization": f"Bearer {m.group(1)}"}, f"bearer token in {where}"
+            if kind == "basic_url":
+                enc = _b64.b64encode(f"{m.group(1)}:{m.group(2)}".encode()).decode()
+                log(f"discovered HTTP basic credentials in {where}")
+                return {"Authorization": f"Basic {enc}"}, f"basic-auth in {where}"
+            if kind == "api_key":
+                log(f"discovered API key in {where}")
+                return {"X-API-Key": m.group(1)}, f"api key in {where}"
+    return {}, ""
+
+
+def run_recon(
+    assessment_id: str,
+    target: str,
+    sandbox_client,
+    *,
+    user_auth=None,
+    max_pages: int = 25,
+    network_recon_enabled: bool = False,
+    browser_recon_enabled: bool = False,
+    log: Callable[[str], None] = lambda m: None,
+) -> tuple[str, dict, str]:
+    """Unified recon pipeline. ALWAYS runs unauthenticated recon first, then
+    AUTO-ESCALATES to authenticated recon when credentials are available — either
+    operator-supplied (user_auth) OR leaked/exposed during the unauth pass. One
+    blackboard, one render. Returns (surface_text, session_headers, auth_summary)."""
+    from owlforge.engine.auth import establish_session
+
+    def _reqfn(method, url, headers=None, params=None, body=None):
+        if sandbox_client is not None:
+            try:
+                return sandbox_client.http_request(method, url, headers=headers, params=params, body=body)
+            except Exception as e:
+                return {"error": str(e)}
+        import httpx
+        try:
+            r = httpx.request(method, url, headers=headers, params=params, content=body,
+                              follow_redirects=False, timeout=20.0)
+            return {"status": r.status_code, "headers": dict(r.headers), "body": r.text}
+        except Exception as e:
+            return {"error": str(e)}
+
+    # pass 1: unauthenticated (always)
+    log("unauth recon")
+    unauth_inv, header = _collect_surface(
+        assessment_id, target, {}, sandbox_client,
+        max_pages=max_pages, browser_recon_enabled=browser_recon_enabled, log=log)
+    unauth_keys = {(it["method"], it["url"], tuple(sorted(it["params"]))) for it in unauth_inv}
+
+    # resolve credentials: operator-supplied first, else discovered in unauth artifacts
+    session_headers: dict = {}
+    auth_summary = "unauth (no credentials provided or discovered)"
+    if user_auth is not None and getattr(user_auth, "mode", "unauth") != "unauth":
+        session_headers = establish_session(user_auth, _reqfn, log=log)
+        if session_headers:
+            auth_summary = f"authenticated (operator {user_auth.mode})"
+    if not session_headers:
+        disc_headers, prov = discover_credentials(target, unauth_inv, sandbox_client, _reqfn, log=log)
+        if disc_headers:
+            session_headers = disc_headers
+            auth_summary = f"authenticated (auto-escalated: {prov})"
+
+    inv = unauth_inv
+    # pass 2: authenticated (only if a session was resolved)
+    if session_headers:
+        log("auth recon (escalated) — re-mapping the logged-in surface")
+        auth_inv, _ = _collect_surface(
+            assessment_id, target, session_headers, sandbox_client,
+            max_pages=max_pages, browser_recon_enabled=browser_recon_enabled, log=log)
+        for it in auth_inv:
+            key = (it["method"], it["url"], tuple(sorted(it["params"])))
+            if key not in unauth_keys:
+                it["source"] = f"auth/{it.get('source', 'link')}"  # mark authenticated-only surface
+        inv = _dedup(unauth_inv + auth_inv)
+
+    persist(assessment_id, inv)
+    text = header + "\n\n" + render_inventory(inv)
+    if network_recon_enabled:
+        net = network_recon(target, sandbox_client, log=log)
+        if net.strip():
+            text += "\n\n# Network recon (nmap, optional)\n" + net.strip()[:1500]
+    return text, session_headers, auth_summary
 
 WORDLIST = "/opt/owlforge/wordlists/common.txt"
 _MATCH_CODES = "200,204,301,302,307,308,401,403,405"
