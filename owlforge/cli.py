@@ -86,6 +86,7 @@ def run(
     recon: bool = typer.Option(True, "--recon/--no-recon", help="Deterministic recon before testing."),
     recon_pages: int = typer.Option(25, "--recon-pages", help="Max pages to crawl during recon."),
     network_recon: bool = typer.Option(False, "--network-recon", help="Also run port/service discovery (nmap)."),
+    browser_recon: bool = typer.Option(False, "--browser-recon", help="Headless-Chromium render (SPA recon)."),
     orchestrate: bool = typer.Option(True, "--orchestrate/--single", help="Multi-agent default (--single = one agent)"),
 ) -> None:
     """Start an assessment and run the single-agent loop, with the sandbox if available."""
@@ -189,6 +190,7 @@ def run(
         try:
             surface_text = recon_phase(aid, target, session_headers, sandbox_client,
                                        max_pages=recon_pages, network_recon_enabled=network_recon,
+                                       browser_recon_enabled=browser_recon,
                                        log=lambda m: console.print(f"[dim]\[recon] {m}[/]"))
             if surface_text:
                 console.print(f"[dim]\[recon] surface inventory:\n{surface_text[:700]}[/]")

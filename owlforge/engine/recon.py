@@ -197,6 +197,7 @@ def recon_phase(
     sandbox_client,
     max_pages: int = 25,
     network_recon_enabled: bool = False,
+    browser_recon_enabled: bool = False,
     log: Callable[[str], None] = lambda m: None,
 ) -> str:
     """Run deterministic recon, persist the inventory, return it rendered for the prompt."""
@@ -221,6 +222,9 @@ def recon_phase(
     inv += js_recon(target, request_fn, log=log)
     inv += api_spec_discovery(target, request_fn, log=log)
     inv += graphql_probe(target, request_fn, log=log)
+    if browser_recon_enabled:
+        _pages = [it["url"] for it in inv if it.get("source") in ("link", "content-discovery")][:6]
+        inv += browser_recon(target, sandbox_client, pages=_pages, session_headers=session_headers, log=log)
     inv = _dedup(inv)
     persist(assessment_id, inv)
 
@@ -368,3 +372,38 @@ def graphql_probe(target: str, request_fn: RequestFn, log: Callable[[str], None]
             log(f"graphql endpoint {gp} (introspection {'OPEN' if on else 'closed/unknown'})")
             return [{"url": _strip(base + gp), "method": "POST", "params": ["query"], "source": "graphql"}]
     return []
+
+
+def browser_recon(
+    target: str,
+    sandbox_client,
+    pages: list[str] | None = None,
+    session_headers: dict | None = None,
+    max_pages: int = 6,
+    log: Callable[[str], None] = lambda m: None,
+) -> list[dict]:
+    """Headless-Chromium render of key pages -> extract surface from the RENDERED DOM.
+    Recovers JS-built links/params the raw-HTML crawler can't see (SPAs). Carries the
+    auth session, so it works authenticated too. Flag-gated (heavy)."""
+    if sandbox_client is None:
+        log("browser recon skipped (no sandbox)")
+        return []
+    urls: list[str] = []
+    for u in [target, *(pages or [])]:
+        if u not in urls:
+            urls.append(u)
+    out: list[dict] = []
+    rendered = 0
+    for u in urls[:max_pages]:
+        try:
+            d = sandbox_client.render(u, headers=(session_headers or None))
+        except Exception as e:
+            log(f"render error {u}: {e}")
+            continue
+        if d.get("error"):
+            log(f"render {u}: {d['error']}")
+            continue
+        out.extend(extract_surface(d.get("final_url", u), d.get("html", "") or ""))
+        rendered += 1
+    log(f"browser recon: rendered {rendered} page(s), {len(out)} item(s)")
+    return out

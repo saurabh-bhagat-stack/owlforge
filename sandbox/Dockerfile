@@ -43,6 +43,7 @@ COPY agentd/requirements.txt /opt/owlforge/agentd/requirements.txt
 RUN python3 -m venv /opt/owlforge/venv \
     && /opt/owlforge/venv/bin/pip install -r /opt/owlforge/agentd/requirements.txt
 COPY agentd /opt/owlforge/agentd
+RUN /opt/owlforge/venv/bin/playwright install --with-deps chromium
 COPY mitm /opt/owlforge/mitm-addons
 COPY entrypoint.sh /opt/owlforge/entrypoint.sh
 RUN chmod +x /opt/owlforge/entrypoint.sh && mkdir -p /workspace

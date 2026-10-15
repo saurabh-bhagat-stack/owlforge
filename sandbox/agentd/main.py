@@ -168,3 +168,40 @@ def http_request(req: HttpRequest) -> dict:
         }
     except Exception as e:
         return {"error": f"{type(e).__name__}: {e}"}
+
+
+class RenderRequest(BaseModel):
+    url: str
+    headers: dict[str, str] | None = None
+    wait_until: str = "networkidle"
+    timeout_ms: int = 30_000
+
+
+@app.post("/render", dependencies=[Depends(auth)])
+async def render(req: RenderRequest) -> dict:
+    """Headless-Chromium render: load the URL (run its JS), return the rendered DOM so
+    the engine can extract surface that is not in the raw HTML (SPA/JS-built links).
+    Carries auth via extra_http_headers so it works authenticated too."""
+    try:
+        from playwright.async_api import async_playwright
+    except Exception as e:
+        return {"error": f"playwright unavailable: {e}"}
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+            context = await browser.new_context(
+                extra_http_headers=req.headers or {}, ignore_https_errors=True
+            )
+            page = await context.new_page()
+            resp = await page.goto(req.url, wait_until=req.wait_until, timeout=req.timeout_ms)
+            try:
+                await page.wait_for_timeout(800)  # settle late JS
+            except Exception:
+                pass
+            html = await page.content()
+            status = resp.status if resp else 0
+            final_url = page.url
+            await browser.close()
+            return {"status": status, "final_url": final_url, "html": html[:MAX_OUTPUT]}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}

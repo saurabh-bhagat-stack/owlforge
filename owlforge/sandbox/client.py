@@ -74,3 +74,13 @@ class SandboxClient:
         )
         r.raise_for_status()
         return r.json()
+
+    def render(self, url: str, *, headers: dict | None = None, timeout_ms: int = 30_000) -> dict:
+        r = httpx.post(
+            f"{self.base_url}/render",
+            headers=self._headers(),
+            json={"url": url, "headers": headers, "timeout_ms": timeout_ms},
+            timeout=max(self.timeout, timeout_ms / 1000 + 20),
+        )
+        r.raise_for_status()
+        return r.json()
