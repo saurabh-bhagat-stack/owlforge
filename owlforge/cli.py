@@ -224,7 +224,8 @@ def run(
                 )
             )
         emit("status", "validation phase")
-        vcounts = asyncio.run(validate_findings(assessment_id=aid, sandbox=sandbox_client, emit=emit))
+        vcounts = asyncio.run(validate_findings(assessment_id=aid, sandbox=sandbox_client, emit=emit,
+                                                session_headers=session_headers))
         emit("status", f"validation — {vcounts['validated']} validated, "
                        f"{vcounts['rejected']} rejected, {vcounts['manual']} manual")
         emit("status", "reporting phase")

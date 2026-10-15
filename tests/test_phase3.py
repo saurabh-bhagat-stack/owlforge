@@ -212,3 +212,88 @@ def test_structured_repro_validates_via_http_request(isolated):
     assert counts["validated"] == 1
     with isolated.session() as s:
         assert s.get(Finding, fid).status == "validated"
+
+
+class _XssSandbox(_FakeSandbox):
+    """Fake whose /xss_check reports execution when a payload reaches the `exec`-param."""
+    def __init__(self, executes: bool) -> None:
+        super().__init__("")
+        self.executes = executes
+
+    def xss_check(self, url, token, *, headers=None, timeout_ms=15_000):
+        return {"executed": self.executes and ("onerror" in url or "script" in url),
+                "via": "script-exec (window.__owl_xss)" if self.executes else "", "status": 200}
+
+
+def test_browser_xss_validated_on_execution(isolated):
+    from owlforge.engine.validate import validate_findings
+
+    fid = _mk(isolated, id="f_xss_exec", title="Reflected XSS in search", severity="high",
+              repro_url="https://t/search", repro_method="GET",
+              repro_params={"q": "<img src=x onerror=alert(1)>"}, success_signal="owl")
+    counts = asyncio.run(validate_findings(
+        assessment_id="asmt_x", sandbox=_XssSandbox(True), emit=Emitter("asmt_x", persist=False)))
+    assert counts["validated"] == 1 and counts["rejected"] == 0
+    from owlforge.store.models import Finding
+    with isolated.session() as s:
+        assert "EXECUTED" in (s.get(Finding, fid).validation_note or "")
+
+
+def test_browser_xss_rejected_when_not_executing(isolated):
+    from owlforge.engine.validate import validate_findings
+
+    _mk(isolated, id="f_xss_noexec", title="Reflected XSS in search", severity="high",
+        repro_url="https://t/search", repro_method="GET",
+        repro_params={"q": "<script>alert(1)</script>"}, success_signal="owl")
+    counts = asyncio.run(validate_findings(
+        assessment_id="asmt_x", sandbox=_XssSandbox(False), emit=Emitter("asmt_x", persist=False)))
+    assert counts["rejected"] == 1 and counts["validated"] == 0
+
+
+class _DiffSandbox:
+    """Fake for differential access-control: `protected` decides whether the anon
+    (no-session) request is denied (401) or returns the same resource as authed."""
+    def __init__(self, protected: bool) -> None:
+        self.protected = protected
+
+    def http_request(self, method, url, *, headers=None, params=None, body=None, timeout_ms=60_000):
+        authed = bool(headers)
+        if not authed and self.protected:
+            return {"status": 401, "headers": {}, "body": "nope"}
+        return {"status": 200, "headers": {}, "body": "ACCOUNT DETAILS: balance=4210 user=carlos " * 4}
+
+
+def test_differential_access_validates_when_reachable_anonymously(isolated):
+    from owlforge.engine.validate import validate_findings
+
+    fid = _mk(isolated, id="f_bac", title="Broken Access Control on /my-account",
+              severity="high", repro_url="https://t/my-account", repro_method="GET")
+    counts = asyncio.run(validate_findings(
+        assessment_id="asmt_x", sandbox=_DiffSandbox(protected=False),
+        emit=Emitter("asmt_x", persist=False), session_headers={"Cookie": "s=1"}))
+    assert counts["validated"] == 1
+    from owlforge.store.models import Finding
+    with isolated.session() as s:
+        assert "anonymously" in (s.get(Finding, fid).validation_note or "")
+
+
+def test_differential_access_rejects_when_boundary_enforced(isolated):
+    from owlforge.engine.validate import validate_findings
+
+    _mk(isolated, id="f_bac2", title="IDOR on account", severity="high",
+        repro_url="https://t/my-account", repro_method="GET")
+    counts = asyncio.run(validate_findings(
+        assessment_id="asmt_x", sandbox=_DiffSandbox(protected=True),
+        emit=Emitter("asmt_x", persist=False), session_headers={"Cookie": "s=1"}))
+    assert counts["rejected"] == 1 and counts["validated"] == 0
+
+
+def test_access_control_stays_manual_without_session(isolated):
+    from owlforge.engine.validate import validate_findings
+
+    _mk(isolated, id="f_bac3", title="IDOR on account", severity="high",
+        repro_url="https://t/my-account", repro_method="GET")
+    counts = asyncio.run(validate_findings(
+        assessment_id="asmt_x", sandbox=_DiffSandbox(protected=True),
+        emit=Emitter("asmt_x", persist=False), session_headers=None))
+    assert counts["manual"] == 1

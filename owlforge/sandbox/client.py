@@ -84,3 +84,15 @@ class SandboxClient:
         )
         r.raise_for_status()
         return r.json()
+
+    def xss_check(self, url: str, token: str, *, headers: dict | None = None,
+                  timeout_ms: int = 15_000) -> dict:
+        """Confirm XSS by execution in real Chromium. Returns {executed, via, status}."""
+        r = httpx.post(
+            f"{self.base_url}/xss_check",
+            headers=self._headers(),
+            json={"url": url, "token": token, "headers": headers, "timeout_ms": timeout_ms},
+            timeout=max(self.timeout, timeout_ms / 1000 + 20),
+        )
+        r.raise_for_status()
+        return r.json()

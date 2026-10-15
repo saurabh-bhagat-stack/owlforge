@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import html
+import secrets
 from datetime import UTC
 
 from sqlmodel import select
@@ -32,8 +33,56 @@ def _needs_differential(title: str) -> bool:
     return any(k in t for k in _ACCESS_KEYWORDS)
 
 
+_XSS_KEYWORDS = ("xss", "cross-site scripting", "cross site scripting", "script injection")
+
+
+def _is_xss(title: str) -> bool:
+    t = (title or "").lower()
+    return any(k in t for k in _XSS_KEYWORDS)
+
+
+async def _browser_confirm_xss(sandbox: SandboxClient, rurl: str, rparams: dict) -> tuple[bool, bool, str]:
+    """Confirm XSS by EXECUTION in real Chromium (via agentd /xss_check). Injects a
+    sentinel payload that sets window.__owl_xss=token; returns (ran, executed, via).
+    ran=False only if the sandbox image has no xss_check (older build) — then the
+    caller falls back to the HTTP-text gate."""
+    if not hasattr(sandbox, "xss_check"):
+        return (False, False, "")
+    from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
+
+    token = "owlxss" + secrets.token_hex(6)
+    payloads = [
+        f"<script>window.__owl_xss='{token}'</script>",
+        f"\"><script>window.__owl_xss='{token}'</script>",
+        f"<img src=x onerror=\"window.__owl_xss='{token}'\">",
+        f"'><img src=x onerror=window.__owl_xss='{token}'>",
+    ]
+    params = {k: str(v) for k, v in (rparams or {}).items()}
+    # prefer params the agent already fuzzed (payload-looking values), else all params
+    hints = ("<", ">", "script", "onerror", "alert", '"', "'")
+    cand = [k for k, v in params.items() if any(h in v for h in hints)] or list(params.keys())
+    cand = cand[:2] or [None]
+
+    sp = urlsplit(rurl)
+    base_q = dict(parse_qsl(sp.query))
+    base_q.update(params)
+    for pname in cand:
+        for pl in payloads:
+            q = dict(base_q)
+            q[pname if pname is not None else "q"] = pl
+            url = urlunsplit((sp.scheme, sp.netloc, sp.path, urlencode(q), sp.fragment))
+            try:
+                res = await asyncio.to_thread(sandbox.xss_check, url, token)
+            except Exception:
+                continue
+            if res.get("executed"):
+                return (True, True, res.get("via", "browser"))
+    return (True, False, "")
+
+
 async def validate_findings(
-    *, assessment_id: str, sandbox: SandboxClient | None, emit: Emitter
+    *, assessment_id: str, sandbox: SandboxClient | None, emit: Emitter,
+    session_headers: dict | None = None,
 ) -> dict[str, int]:
     with session() as s:
         rows = s.exec(
@@ -47,8 +96,25 @@ async def validate_findings(
     counts = {"validated": 0, "rejected": 0, "manual": 0}
     for fid, repro, signal, title, rmethod, rurl, rparams, rbody in items:
         if _needs_differential(title):
+            if sandbox is not None and session_headers and rurl.strip():
+                verdict, note = await _differential_access(
+                    sandbox, rmethod, rurl, rparams, rbody, session_headers)
+                if verdict == "validated":
+                    _set(fid, "validated", confidence="high", note=note)
+                    counts["validated"] += 1
+                    emit("finding_validated", f"VALIDATED: {title}")
+                    continue
+                if verdict == "rejected":
+                    _set(fid, "false_positive", note=note)
+                    counts["rejected"] += 1
+                    emit("finding_rejected", f"rejected ({note}): {title}")
+                    continue
+                _set(fid, "candidate", note=f"access-control needs manual review — {note}")
+                counts["manual"] += 1
+                emit("log", f"access-control inconclusive (manual): {title}")
+                continue
             _set(fid, "candidate", note=("access-control/IDOR needs differential testing "
-                 "(authorized vs unauthorized / two accounts) — not auto-validated on a single request"))
+                 "(authorized vs unauthorized / two accounts) — no session available to auto-test"))
             counts["manual"] += 1
             emit("log", f"access-control finding kept as candidate (needs differential): {title}")
             continue
@@ -61,6 +127,22 @@ async def validate_findings(
             _set(fid, "candidate", note="no sandbox available to validate")
             counts["manual"] += 1
             continue
+        if _is_xss(title) and rurl.strip():
+            ran, executed, via = await _browser_confirm_xss(sandbox, rurl, rparams)
+            if ran and executed:
+                _set(fid, "validated", confidence="high",
+                     note=f"reproduced: XSS EXECUTED in real browser — {via}")
+                counts["validated"] += 1
+                emit("finding_validated", f"VALIDATED: {title}")
+                continue
+            if ran and not executed:
+                _set(fid, "false_positive",
+                     note="not reproduced: payload did not execute in a real browser "
+                          "(escaped output or non-executing sink)")
+                counts["rejected"] += 1
+                emit("finding_rejected", f"rejected (no browser execution): {title}")
+                continue
+            # ran is False (older image without xss_check) -> fall through to HTTP-text gate
         try:
             if rurl.strip():
                 from owlforge.tools.builtin import _normalize_params
@@ -98,6 +180,52 @@ async def validate_findings(
             counts["rejected"] += 1
             emit("finding_rejected", f"rejected ({reason}): {title}")
     return counts
+
+
+def _looks_like_login(body: str) -> bool:
+    b = (body or "").lower()
+    return ("password" in b and ("login" in b or "sign in" in b or "<form" in b)) or "please log in" in b
+
+
+def _similar(a: str, b: str) -> bool:
+    """Two response bodies are 'equivalent' if their lengths are within 10% — a cheap
+    proxy for 'the anonymous request got the same protected resource'."""
+    la, lb = len(a), len(b)
+    if la == 0 or lb == 0:
+        return False
+    return min(la, lb) / max(la, lb) >= 0.9
+
+
+async def _differential_access(
+    sandbox: SandboxClient, method: str, url: str, params: dict, body: str, session_headers: dict
+) -> tuple[str, str]:
+    """Confirm broken access control by DIFFERENTIAL test: fetch the resource both
+    authenticated and anonymously. Returns (verdict, note) where verdict is
+    'validated' (reachable anonymously), 'rejected' (boundary enforced), or
+    'inconclusive'. Sound because it directly probes the authz boundary rather than
+    trusting a single 200."""
+    from owlforge.tools.builtin import _normalize_params
+
+    norm = _normalize_params(params) if params else None
+    m = method or "GET"
+    authed = await asyncio.to_thread(
+        sandbox.http_request, m, url, headers=session_headers, params=norm, body=(body or None))
+    anon = await asyncio.to_thread(
+        sandbox.http_request, m, url, headers={}, params=norm, body=(body or None))
+    a_status, a_body = int(authed.get("status") or 0), (authed.get("body") or "")
+    n_status, n_body = int(anon.get("status") or 0), (anon.get("body") or "")
+
+    if a_status != 200 or len(a_body) < 50:
+        return ("inconclusive", f"authenticated request is not a usable resource (status {a_status})")
+    if n_status in (401, 403) or 300 <= n_status < 400 or len(n_body) < 50:
+        return ("rejected", f"boundary enforced: anonymous status {n_status} vs authenticated {a_status}")
+    if _looks_like_login(n_body):
+        return ("rejected", "boundary enforced: anonymous request returned a login page")
+    if n_status == 200 and _similar(a_body, n_body):
+        return ("validated",
+                f"broken access control: protected resource reachable anonymously "
+                f"(authenticated {a_status} == anonymous {n_status}, equivalent content)")
+    return ("inconclusive", f"anonymous status {n_status}; content differs — manual review")
 
 
 def _set(finding_id: str, status: str, *, confidence: str | None = None, note: str = "") -> None:

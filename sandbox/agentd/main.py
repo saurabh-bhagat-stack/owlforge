@@ -205,3 +205,66 @@ async def render(req: RenderRequest) -> dict:
             return {"status": status, "final_url": final_url, "html": html[:MAX_OUTPUT]}
     except Exception as e:
         return {"error": f"{type(e).__name__}: {e}"}
+
+
+class XssCheckRequest(BaseModel):
+    url: str
+    token: str
+    headers: dict[str, str] | None = None
+    wait_until: str = "load"
+    timeout_ms: int = 15_000
+
+
+@app.post("/xss_check", dependencies=[Depends(auth)])
+async def xss_check(req: XssCheckRequest) -> dict:
+    """Confirm XSS by EXECUTION, not reflection. The caller injects a sentinel
+    payload that (if it runs) sets `window.__owl_xss = token` and/or fires a
+    dialog containing the token. We render the URL in real Chromium and report
+    whether the token actually executed — so HTML-encoded/escaped reflections and
+    non-executing sinks are NOT confirmed, while DOM/stored XSS is."""
+    import asyncio
+
+    try:
+        from playwright.async_api import async_playwright
+    except Exception as e:
+        return {"error": f"playwright unavailable: {e}"}
+    dialogs: list[str] = []
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+            context = await browser.new_context(
+                extra_http_headers=req.headers or {}, ignore_https_errors=True
+            )
+            page = await context.new_page()
+
+            def _on_dialog(d) -> None:
+                dialogs.append(d.message or "")
+                asyncio.ensure_future(d.dismiss())
+
+            page.on("dialog", _on_dialog)
+            try:
+                resp = await page.goto(req.url, wait_until=req.wait_until, timeout=req.timeout_ms)
+            except Exception as e:
+                resp = None
+                dialogs.append(f"__nav_error__:{type(e).__name__}")
+            try:
+                await page.wait_for_timeout(500)  # let onerror/async sinks fire
+            except Exception:
+                pass
+            marker = None
+            try:
+                marker = await page.evaluate("() => window.__owl_xss || null")
+            except Exception:
+                marker = None
+            status = resp.status if resp else 0
+            await browser.close()
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+    executed = False
+    via = ""
+    if marker is not None and str(marker) == req.token:
+        executed, via = True, "script-exec (window.__owl_xss)"
+    elif any(req.token in d for d in dialogs):
+        executed, via = True, "dialog (alert/confirm/prompt)"
+    return {"executed": executed, "via": via, "status": status, "dialogs": dialogs[:5]}
