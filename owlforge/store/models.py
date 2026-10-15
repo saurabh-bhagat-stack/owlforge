@@ -76,7 +76,12 @@ class Finding(SQLModel, table=True):
     evidence: list[dict] = Field(default_factory=list, sa_column=Column(JSON))
     # Evidence-gated validation: the agent supplies a command that reproduces the
     # finding and a signal expected in its output. The validator re-runs it.
-    repro_command: str = ""
+    repro_command: str = ""            # legacy shell repro (fallback)
+    # structured repro (preferred — re-issued via http_request, no shell quoting):
+    repro_method: str = "GET"
+    repro_url: str = ""
+    repro_params: dict = Field(default_factory=dict, sa_column=Column(JSON))
+    repro_body: str = ""
     success_signal: str = ""
     validation_note: str = ""
     filed_by_agent_id: str | None = None

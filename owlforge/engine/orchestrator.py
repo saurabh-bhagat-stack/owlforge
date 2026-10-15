@@ -121,9 +121,10 @@ async def run_orchestrated(
             f"You are a {_TITLE[cls]} specialist. Test ONLY for {_TITLE[cls]} on the targets below — "
             f"nothing else. Signal of success: {_HINT[cls]}. Use http_request (put RAW payloads in "
             f"params; do not url-encode). Test each target's parameter. The moment you CONFIRM an issue, "
-            f"call create_finding with severity, a proof_of_concept, a repro_command that re-runs cleanly "
-            f"and PRINTS the success_signal, and the success_signal. Then call finish. Do not file what "
-            f"you cannot reproduce."
+            "call create_finding with severity, a proof_of_concept, and a STRUCTURED repro: "
+            "repro_url (the endpoint), repro_params with the EXACT raw payload value that triggered it, "
+            "and success_signal (text present ONLY when vulnerable, e.g. 500). Then call finish. Do not "
+            "file what you cannot reproduce."
         )
         try:
             await run_single_agent(

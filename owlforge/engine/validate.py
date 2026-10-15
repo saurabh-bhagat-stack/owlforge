@@ -41,18 +41,19 @@ async def validate_findings(
                 Finding.assessment_id == assessment_id, Finding.status == "candidate"
             )
         ).all()
-        items = [(f.id, f.repro_command, f.success_signal, f.title) for f in rows]
+        items = [(f.id, f.repro_command, f.success_signal, f.title,
+                  f.repro_method, f.repro_url, dict(f.repro_params or {}), f.repro_body) for f in rows]
 
     counts = {"validated": 0, "rejected": 0, "manual": 0}
-    for fid, repro, signal, title in items:
+    for fid, repro, signal, title, rmethod, rurl, rparams, rbody in items:
         if _needs_differential(title):
             _set(fid, "candidate", note=("access-control/IDOR needs differential testing "
                  "(authorized vs unauthorized / two accounts) — not auto-validated on a single request"))
             counts["manual"] += 1
             emit("log", f"access-control finding kept as candidate (needs differential): {title}")
             continue
-        if not repro.strip():
-            _set(fid, "candidate", note="no repro_command supplied — manual validation required")
+        if not (rurl.strip() or repro.strip()):
+            _set(fid, "candidate", note="no repro supplied — manual validation required")
             counts["manual"] += 1
             emit("log", f"manual-review (no repro): {title}")
             continue
@@ -61,8 +62,16 @@ async def validate_findings(
             counts["manual"] += 1
             continue
         try:
-            r = await asyncio.to_thread(sandbox.exec, repro, timeout_ms=60_000)
-            out = f"{r.stdout}\n{r.stderr}".lower()
+            if rurl.strip():
+                from owlforge.tools.builtin import _normalize_params
+                params = _normalize_params(rparams) if rparams else None
+                d = await asyncio.to_thread(
+                    sandbox.http_request, rmethod or "GET", rurl, params=params, body=(rbody or None)
+                )
+                out = f"{d.get('status', '')}\n{d.get('headers', '')}\n{d.get('body', '') or ''}".lower()
+            else:
+                r = await asyncio.to_thread(sandbox.exec, repro, timeout_ms=60_000)
+                out = f"{r.stdout}\n{r.stderr}".lower()
             sig = signal.strip()
             if not sig:
                 reproduced, reason = (r.exit_code == 0), "exit 0 (no signal supplied)"

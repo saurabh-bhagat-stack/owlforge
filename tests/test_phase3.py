@@ -29,6 +29,12 @@ class _FakeSandbox:
     def exec(self, command: str, *, workdir=None, timeout_ms=60_000) -> ExecResult:
         return ExecResult(exit_code=0, stdout=self.out, stderr="", duration_ms=1)
 
+    def http_request(self, method, url, *, headers=None, params=None, body=None, timeout_ms=60_000):
+        # emulate ginandjuice: a lone quote in category -> 500, else 200
+        q = (params or {}).get("category", "")
+        status = 500 if q == "'" else 200
+        return {"status": status, "headers": {}, "body": self.out}
+
 
 def _mk(db, **kw):
     from owlforge.store.models import Finding
@@ -190,3 +196,19 @@ def test_migration_adds_missing_column(tmp_path, monkeypatch):
     with db.get_engine().begin() as conn:
         cols3 = [r[1] for r in conn.execute(text("PRAGMA table_info('finding')")).all()]
     assert "validation_note" in cols3
+
+
+def test_structured_repro_validates_via_http_request(isolated):
+    import asyncio
+
+    from owlforge.engine.validate import validate_findings
+    from owlforge.store.models import Finding
+
+    fid = _mk(isolated, id="f_sqli", title="SQL Injection in category parameter", severity="high",
+              repro_url="https://t/catalog", repro_method="GET",
+              repro_params={"category": "'"}, success_signal="500")
+    counts = asyncio.run(validate_findings(
+        assessment_id="asmt_x", sandbox=_FakeSandbox(""), emit=Emitter("asmt_x", persist=False)))
+    assert counts["validated"] == 1
+    with isolated.session() as s:
+        assert s.get(Finding, fid).status == "validated"

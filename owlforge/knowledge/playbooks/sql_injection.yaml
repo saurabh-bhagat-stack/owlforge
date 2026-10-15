@@ -12,6 +12,6 @@ body: |
   - Confirm SQL context: a balanced quote ('') or a comment ('-- -) should RESTORE the
     baseline (200). A 200 -> 500 -> 200 pattern confirms injection.
   - Escalate if needed: boolean (' AND '1'='1 vs ' AND '1'='2), UNION, or time-based.
-  File with: repro_command = curl -s -o /dev/null -w '%{http_code}' "<url with the LONE
-  single-quote payload that returned 500>"  and  success_signal = "500". Use the exact
-  quote payload that triggered the error (a lone '), not a balanced boolean payload.
+  File with: a STRUCTURED repro — repro_url (the endpoint), repro_params with the EXACT lone
+  single-quote payload (e.g. {"category": "'"}), and success_signal = "500". (owlforge re-
+  issues it via http_request, so no shell quoting.)

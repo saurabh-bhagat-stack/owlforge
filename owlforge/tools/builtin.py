@@ -143,6 +143,10 @@ async def _create_finding(args: dict[str, Any], ctx: ToolContext) -> str:
         impact=str(args.get("impact", "")),
         remediation=str(args.get("remediation", "")),
         repro_command=str(args.get("repro_command", "")),
+        repro_method=str(args.get("repro_method", "GET") or "GET"),
+        repro_url=str(args.get("repro_url", "")),
+        repro_params=dict(args.get("repro_params", {}) or {}),
+        repro_body=str(args.get("repro_body", "")),
         success_signal=str(args.get("success_signal", "")),
         evidence=list(args.get("evidence", []) or []),
         status="candidate",
@@ -203,9 +207,10 @@ def build_registry(with_sandbox: bool = False) -> ToolRegistry:
     ))
     reg.add(Tool(
         name="create_finding",
-        description=("File a vulnerability finding as a CANDIDATE. For auto-validation, include "
-                     "repro_command (a shell command that demonstrates the issue in the sandbox) "
-                     "and success_signal (text expected in that command's output when the vuln is present)."),
+        description=("File a vulnerability finding as a CANDIDATE. For auto-validation, PREFER a "
+                     "structured repro: repro_url + repro_params (RAW payload values) + success_signal "
+                     "(text present ONLY when vulnerable). owlforge re-issues it via http_request (no "
+                     "shell) and confirms the signal. repro_command is a legacy fallback."),
         parameters={
             "type": "object",
             "properties": {
@@ -218,8 +223,12 @@ def build_registry(with_sandbox: bool = False) -> ToolRegistry:
                 "proof_of_concept": {"type": "string"},
                 "impact": {"type": "string"},
                 "remediation": {"type": "string"},
-                "repro_command": {"type": "string", "description": "shell command re-run during validation"},
-                "success_signal": {"type": "string", "description": "text expected in repro output if vulnerable"},
+                "repro_url": {"type": "string", "description": "PREFERRED: full URL to re-issue (no shell)"},
+                "repro_method": {"type": "string", "description": "HTTP method for repro_url (default GET)"},
+                "repro_params": {"type": "object", "description": "PREFERRED: repro params, RAW payload values"},
+                "repro_body": {"type": "string", "description": "raw body for the repro request"},
+                "repro_command": {"type": "string", "description": "fallback shell command (avoid quote payloads)"},
+                "success_signal": {"type": "string", "description": "text present ONLY when vulnerable"},
             },
             "required": ["title", "severity"],
         },
