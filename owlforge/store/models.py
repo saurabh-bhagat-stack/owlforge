@@ -91,3 +91,15 @@ class Report(SQLModel, table=True):
     risk_rating: str = ""
     body_markdown: str = ""
     generated_at: datetime | None = None
+
+
+class SurfaceItem(SQLModel, table=True):
+    """One discovered attack-surface item (endpoint + its parameters)."""
+
+    id: str = Field(primary_key=True)
+    assessment_id: str = Field(index=True)
+    url: str
+    method: str = "GET"
+    params: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    source: str = "link"  # link | form | seed
+    created_at: datetime = Field(default_factory=_now)

@@ -105,13 +105,20 @@ def run_model(
         except Exception as e:
             log(f"sandbox start failed: {e}")
 
+    surface = ""
+    try:
+        from owlforge.engine.recon import recon_phase
+        surface = recon_phase(aid, target, None, sandbox_client, max_pages=25, log=log)
+    except Exception as e:
+        log(f"recon failed: {e}")
+
     t0 = time.monotonic()
     err = ""
     try:
         asyncio.run(run_single_agent(
             client=client, registry=build_registry(with_sandbox=sandbox_client is not None),
             emit=emit, assessment_id=aid, target=target, instructions=mission,
-            scan_mode=scan_mode, max_turns=max_turns, sandbox=sandbox_client))
+            scan_mode=scan_mode, max_turns=max_turns, sandbox=sandbox_client, surface=surface or None))
         asyncio.run(validate_findings(assessment_id=aid, sandbox=sandbox_client, emit=emit))
     except Exception as e:
         err = f"{type(e).__name__}: {e}"

@@ -40,3 +40,22 @@ def test_toolcontext_has_session_headers():
     ctx = ToolContext(assessment_id="a", target="t", emit=lambda *a, **k: None,
                       session_headers={"Cookie": "s=1"})
     assert ctx.session_headers == {"Cookie": "s=1"}
+
+
+def test_recon_extracts_params_and_forms_same_origin_only():
+    from owlforge.engine.recon import _dedup, extract_surface, render_inventory
+
+    html = (
+        '<a href="/catalog?category=Gifts">g</a>'
+        '<a href="/catalog?category=Pets">p</a>'
+        '<a href="/product?productId=3">x</a>'
+        '<a href="https://evil.com/leak">ext</a>'
+        '<form action="/login" method="POST"><input name="username"><input name="password"></form>'
+    )
+    items = _dedup(extract_surface("https://t.test/", html))
+    urls = {(i["method"], i["url"], tuple(i["params"])) for i in items}
+    assert ("GET", "https://t.test/catalog", ("category",)) in urls      # the breadth fix
+    assert ("GET", "https://t.test/product", ("productId",)) in urls
+    assert ("POST", "https://t.test/login", ("password", "username")) in urls
+    assert not any("evil.com" in i["url"] for i in items)                # same-origin only
+    assert "category" in render_inventory(items)

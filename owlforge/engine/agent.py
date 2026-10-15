@@ -23,12 +23,17 @@ async def run_single_agent(
     max_turns: int = 20,
     sandbox: SandboxClient | None = None,
     session_headers: dict | None = None,
+    surface: str | None = None,
 ) -> str:
     ctx = ToolContext(assessment_id=assessment_id, target=target, emit=emit, sandbox=sandbox,
                       session_headers=session_headers or {})
     messages: list[Message] = [
         Message(role="system", content=system_prompt(target, instructions, scan_mode)),
-        Message(role="user", content=f"Assess {target}. {instructions}"),
+        Message(role="user", content=(
+            f"Assess {target}. {instructions}"
+            + (f"\n\n# Attack surface (recon found these — TEST THE PARAMETERS ON EACH)\n{surface}"
+               if surface else "")
+        )),
     ]
     specs = registry.specs()
     last_summary = ""

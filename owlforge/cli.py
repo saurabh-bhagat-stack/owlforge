@@ -83,6 +83,8 @@ def run(
     login_url: str = typer.Option(None, "--login-url", help="Form-login URL (authenticated mode)."),
     login_data: str = typer.Option(None, "--login-data", help="urlencoded login fields, e.g. 'username=a&password=b'."),
     login_success: str = typer.Option(None, "--login-success", help="Substring indicating a successful login."),
+    recon: bool = typer.Option(True, "--recon/--no-recon", help="Deterministic recon before testing."),
+    recon_pages: int = typer.Option(25, "--recon-pages", help="Max pages to crawl during recon."),
 ) -> None:
     """Start an assessment and run the single-agent loop, with the sandbox if available."""
     import asyncio
@@ -178,6 +180,18 @@ def run(
         f"mode:    {mode}",
     ]
     console.print(Panel.fit(chr(10).join(panel), title="assessment started", border_style="cyan"))
+
+    surface_text = ""
+    if recon:
+        from owlforge.engine.recon import recon_phase
+        try:
+            surface_text = recon_phase(aid, target, session_headers, sandbox_client,
+                                       max_pages=recon_pages,
+                                       log=lambda m: console.print(f"[dim]\[recon] {m}[/]"))
+            if surface_text:
+                console.print(f"[dim]\[recon] surface inventory:\n{surface_text[:700]}[/]")
+        except Exception as e:
+            console.print(f"[yellow]recon failed: {e}[/]")
 
     emit = Emitter(aid, console=console)
     registry = build_registry(with_sandbox=sandbox_client is not None)
