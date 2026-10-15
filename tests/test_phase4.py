@@ -92,3 +92,12 @@ def test_orchestrator_prioritizes_free_text_params_for_sqli():
            _priority(SQLI, {"url": "https://t/product", "param": "productId"})
     # hidden admin endpoint ranks high for access control
     assert _priority(OBJECT_ID, {"url": "https://t/admin/users", "param": None}) == 3
+
+
+def test_recon_captures_param_links_not_in_href():
+    from owlforge.engine.recon import _dedup, extract_surface
+
+    # category appears as a /path?query string NOT inside an <a href> (JS/data-built)
+    html = '<div data-url="/catalog?category=Gifts"></div><script>var u="/catalog?category=Pets"</script>'
+    items = _dedup(extract_surface("https://t.test/catalog", html))
+    assert any(i["url"] == "https://t.test/catalog" and "category" in i["params"] for i in items)

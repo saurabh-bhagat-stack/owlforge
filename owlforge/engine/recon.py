@@ -52,6 +52,17 @@ def extract_surface(base_url: str, html: str) -> list[dict]:
         names = sorted(set(re.findall(r'name=["\']([^"\']+)["\']', inner, re.I)))
         out.append({"url": _strip(action), "method": method, "params": names, "source": "form"})
 
+    # 3) ANY /path?query occurrence in the raw HTML (catches param links not in <a href>
+    #    — JS-built nav, data-attributes, inline JSON). This recovers e.g. ?category=.
+    for m in re.finditer(r"(/[A-Za-z0-9_\-./]+)\?([A-Za-z0-9_\-=&%]+)", html or ""):
+        path, qs = m.group(1), m.group(2)
+        url = urljoin(base_url, path)
+        if _origin(url) != origin:
+            continue
+        keys = sorted({k for k in re.findall(r"([A-Za-z_][A-Za-z0-9_]{0,30})=", qs)})
+        if keys:
+            out.append({"url": _strip(url), "method": "GET", "params": keys, "source": "html"})
+
     return out
 
 
@@ -114,6 +125,71 @@ def render_inventory(inventory: list[dict], limit: int = 40) -> str:
     return "\n".join(lines) if lines else "(no surface discovered)"
 
 
+_SCRIPT_SRC = None  # compiled lazily
+
+
+def extract_script_srcs(base_url: str, html: str) -> list[str]:
+    import re
+    origin = _origin(base_url)
+    out = []
+    for m in re.finditer(r'<script[^>]+src=["\']([^"\']+\.js[^"\']*)["\']', html or "", re.I):
+        u = urljoin(base_url, m.group(1))
+        if _origin(u) == origin and u not in out:
+            out.append(u)
+    return out
+
+
+def extract_js_endpoints(origin: str, js: str) -> tuple[list[dict], set[str]]:
+    """From a JS bundle: precise path?query literals (endpoint+params), bare path
+    literals (endpoints), and loose param names seen. Regex-based (noisy by nature)."""
+    import re
+    items: dict[tuple, set] = {}
+    # 1) path?query literals -> precise endpoint + params
+    for m in re.finditer(r'["\'](/[A-Za-z0-9_\-./]+)\?([A-Za-z0-9_\-=&%${}.]+)["\']', js or ""):
+        path, qs = m.group(1), m.group(2)
+        keys = sorted({k for k in re.findall(r'([A-Za-z_][A-Za-z0-9_]{0,30})=', qs)})
+        items.setdefault((origin + path, "GET"), set()).update(keys)
+    # 2) bare path literals -> endpoints (skip asset/static)
+    _skip = (".js", ".css", ".png", ".jpg", ".jpeg", ".svg", ".woff", ".woff2", ".map",
+             ".ico", ".gif", ".webp", ".ttf")
+    for m in re.finditer(r'["\'](/[A-Za-z0-9_][A-Za-z0-9_\-./]{1,70})["\']', js or ""):
+        path = m.group(1)
+        if path.lower().endswith(_skip) or "//" in path:
+            continue
+        items.setdefault((origin + path, "GET"), set())
+    # 3) loose param names anywhere (?x= or &x=)
+    loose = {m.group(1) for m in re.finditer(r'[?&]([A-Za-z_][A-Za-z0-9_]{0,30})=', js or "")}
+    out = [{"url": url, "method": method, "params": sorted(ps), "source": "js"} for (url, method), ps in items.items()]
+    return out, loose
+
+
+def js_recon(
+    target: str,
+    request_fn: RequestFn,
+    max_js: int = 12,
+    log: Callable[[str], None] = lambda m: None,
+) -> list[dict]:
+    origin = _origin(target)
+    r = request_fn("GET", target) or {}
+    srcs = extract_script_srcs(target, r.get("body", "") or "")
+    endpoints: list[dict] = []
+    loose_params: set[str] = set()
+    for src in srcs[:max_js]:
+        jr = request_fn("GET", src) or {}
+        eps, loose = extract_js_endpoints(origin, jr.get("body", "") or "")
+        endpoints.extend(eps)
+        loose_params |= loose
+    # attach loose param names to the base app endpoints that have none, best-effort:
+    if loose_params:
+        for ep in endpoints:
+            if not ep["params"]:
+                # only attach to short app paths (not deep api paths) to limit noise
+                if ep["url"].count("/") <= 4:
+                    ep["params"] = sorted(loose_params)[:12]
+    log(f"js recon: {len(srcs)} script(s), {len(endpoints)} js endpoint(s), {len(loose_params)} param name(s)")
+    return endpoints
+
+
 def recon_phase(
     assessment_id: str,
     target: str,
@@ -142,6 +218,7 @@ def recon_phase(
 
     inv = crawl(target, request_fn, max_pages=max_pages, log=log)
     inv += content_discovery(target, sandbox_client, session_headers, log=log)
+    inv += js_recon(target, request_fn, log=log)
     inv = _dedup(inv)
     persist(assessment_id, inv)
 
