@@ -243,3 +243,67 @@ def _set(finding_id: str, status: str, *, confidence: str | None = None, note: s
         f.updated_at = datetime.now(UTC)
         s.add(f)
         s.commit()
+
+
+_CLASS_HINTS = (
+    ("sqli", ("sql injection", "sqli")),
+    ("xss", ("xss", "cross-site scripting", "cross site scripting")),
+    ("access_control", ("idor", "access control", "access-control", "broken access", "bola", "privilege")),
+    ("ssrf", ("ssrf", "server-side request")),
+    ("open_redirect", ("open redirect", "redirect")),
+    ("path_traversal", ("path traversal", "lfi", "local file", "directory traversal")),
+    ("rce", ("rce", "remote code", "command injection", "os command")),
+    ("ssti", ("ssti", "template injection")),
+    ("csrf", ("csrf", "cross-site request")),
+    ("xxe", ("xxe", "xml external")),
+    ("cors", ("cors",)),
+    ("info_disclosure", ("information disclosure", "info disclosure", "secret", "api key", "token exposed")),
+    ("file_upload", ("file upload", "unrestricted upload", "webshell")),
+)
+
+
+def _class_hint(title: str) -> str:
+    t = (title or "").lower()
+    for name, keys in _CLASS_HINTS:
+        if any(k in t for k in keys):
+            return name
+    return "other"
+
+
+_STATUS_RANK = {"validated": 3, "candidate": 2, "false_positive": 1, "duplicate": 0}
+_SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
+
+
+def dedupe_findings(assessment_id: str, emit: Emitter | None = None) -> int:
+    """Collapse overlapping findings (same class + endpoint + method + params) to the
+    single best instance (validated > candidate > false_positive, then higher severity);
+    the rest are marked status='duplicate' so the report shows each issue once. Returns
+    how many were collapsed."""
+    with session() as s:
+        rows = s.exec(select(Finding).where(Finding.assessment_id == assessment_id)).all()
+        groups: dict[tuple, list[Finding]] = {}
+        for f in rows:
+            if f.status == "duplicate":
+                continue
+            key = (_class_hint(f.title), (f.endpoint or f.repro_url or "").rstrip("/"),
+                   (f.method or f.repro_method or "GET").upper(),
+                   tuple(sorted((f.repro_params or {}).keys())))
+            groups.setdefault(key, []).append(f)
+
+        collapsed = 0
+        for group in groups.values():
+            if len(group) < 2:
+                continue
+            group.sort(key=lambda f: (_STATUS_RANK.get(f.status, 0),
+                                      _SEV_RANK.get((f.severity or "").lower(), 0)), reverse=True)
+            for dup in group[1:]:
+                dup.status = "duplicate"
+                dup.validation_note = (dup.validation_note or "") + " [deduped: see " + group[0].id + "]"
+                s.add(dup)
+                collapsed += 1
+        if collapsed:
+            s.commit()
+    if collapsed and emit is not None:
+        emit("status", f"dedupe — collapsed {collapsed} duplicate finding(s)")
+    return collapsed
+

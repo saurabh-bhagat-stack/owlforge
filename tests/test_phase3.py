@@ -328,3 +328,27 @@ def test_understand_secrets_files_and_validates_info_disclosure(isolated):
     counts = asyncio.run(validate_findings(
         assessment_id="asmt_x", sandbox=_ServesSecret(), emit=Emitter("asmt_x", persist=False)))
     assert counts["validated"] == 1
+
+
+def test_dedupe_collapses_same_class_endpoint_keeps_best(isolated):
+    from owlforge.engine.validate import dedupe_findings
+    from owlforge.store.models import Finding
+
+    # same class+endpoint+params: a validated and a candidate -> candidate becomes duplicate
+    _mk(isolated, id="d1", title="SQL Injection in category", severity="high",
+        status="validated", repro_url="https://t/catalog", repro_method="GET",
+        repro_params={"category": "'"})
+    _mk(isolated, id="d2", title="SQLi via category param", severity="medium",
+        status="candidate", repro_url="https://t/catalog", repro_method="GET",
+        repro_params={"category": "'"})
+    # a different class on the same endpoint must NOT be merged
+    _mk(isolated, id="d3", title="Reflected XSS in category", severity="medium",
+        status="candidate", repro_url="https://t/catalog", repro_method="GET",
+        repro_params={"category": "<x>"})
+
+    collapsed = dedupe_findings("asmt_x")
+    assert collapsed == 1
+    with isolated.session() as sess:
+        assert sess.get(Finding, "d1").status == "validated"
+        assert sess.get(Finding, "d2").status == "duplicate"
+        assert sess.get(Finding, "d3").status == "candidate"   # different class, kept

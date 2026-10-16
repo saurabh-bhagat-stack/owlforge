@@ -235,6 +235,8 @@ def run(
                                                 session_headers=session_headers))
         emit("status", f"validation — {vcounts['validated']} validated, "
                        f"{vcounts['rejected']} rejected, {vcounts['manual']} manual")
+        from owlforge.engine.validate import dedupe_findings
+        dedupe_findings(aid, emit)
         emit("status", "reporting phase")
         _md, report_path = build_and_save_report(aid)
     except KeyboardInterrupt:
