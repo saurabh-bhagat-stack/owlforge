@@ -541,6 +541,12 @@ def run_recon(
         except Exception:
             pass
 
+    # fail loudly if the target itself is unreachable (don't imply a clean 0-findings)
+    _root = _reqfn("GET", target)
+    if _root.get("error") or not _root.get("status"):
+        log(f"WARNING: target may be UNREACHABLE — {_root.get('error') or 'no response'}. "
+            "Findings will be empty because nothing could be fetched, NOT because the app is clean.")
+
     # pass 1: unauthenticated (always)
     log("unauth recon")
     unauth_inv, header = _collect_surface(
