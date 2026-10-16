@@ -103,6 +103,7 @@ async def run_orchestrated(
     scan_mode: str,
     target: str,
     max_turns: int = 10,
+    scope=None,
 ) -> str:
     inventory = read_blackboard(assessment_id)
     tasks = plan_tasks(inventory)
@@ -115,6 +116,13 @@ async def run_orchestrated(
         targets = tasks.get(cls)
         if not targets:
             continue
+        if scope is not None and not scope.allows_class(cls):
+            emit("status", f"[specialist:{cls}] skipped (not in --only)")
+            continue
+        if scope is not None:
+            targets = [t for t in targets if scope.in_scope(t["url"])]
+            if not targets:
+                continue
         targets = sorted(targets, key=lambda t: _priority(cls, t), reverse=True)[:_MAX_TARGETS]
         emit("status", f"[specialist:{cls}] testing {len(targets)} target(s) (highest-interest first)")
         instr = (

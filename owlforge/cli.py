@@ -88,6 +88,9 @@ def run(
     network_recon: bool = typer.Option(False, "--network-recon", help="Also run port/service discovery (nmap)."),
     browser_recon: bool = typer.Option(False, "--browser-recon", help="Headless-Chromium render (SPA recon)."),
     orchestrate: bool = typer.Option(True, "--orchestrate/--single", help="Multi-agent default (--single = one agent)"),
+    scope_in: list[str] = typer.Option(None, "--scope", help="Extra in-scope host or host/path glob (repeatable)."),  # noqa: B008
+    scope_out: list[str] = typer.Option(None, "--out-of-scope", help="Out-of-scope host/path glob (repeatable; wins)."),  # noqa: B008
+    only: str = typer.Option(None, "--only", help="Restrict to vuln classes, comma-separated (e.g. xss,sqli)."),
 ) -> None:
     """Start an assessment and run the single-agent loop, with the sandbox if available."""
     import asyncio
@@ -175,6 +178,10 @@ def run(
     ]
     console.print(Panel.fit(chr(10).join(panel), title="assessment started", border_style="cyan"))
 
+    from owlforge.engine.scope import build_scope
+    scope = build_scope(target, scope=scope_in, out_of_scope=scope_out,
+                        only=(only.split(",") if only else None))
+
     surface_text = ""
     session_headers: dict[str, str] = {}
     if recon:
@@ -183,7 +190,7 @@ def run(
             surface_text, session_headers, auth_summary = run_recon(
                 aid, target, sandbox_client, user_auth=user_auth, max_pages=recon_pages,
                 network_recon_enabled=network_recon, browser_recon_enabled=browser_recon,
-                log=lambda m: console.print(rf"[dim]\[recon] {m}[/]"))
+                scope=scope, log=lambda m: console.print(rf"[dim]\[recon] {m}[/]"))
             console.print(rf"[dim]\[auth] {auth_summary}[/]")
             if surface_text:
                 console.print(f"[dim]\\[recon] surface inventory:\n{surface_text[:700]}[/]")
@@ -212,7 +219,7 @@ def run(
             summary = asyncio.run(run_orchestrated(
                 assessment_id=aid, client=client, sandbox=sandbox_client, emit=emit,
                 session_headers=session_headers, scan_mode=mode, target=target,
-                max_turns=max(6, max_turns // 2),
+                max_turns=max(6, max_turns // 2), scope=scope,
             ))
         else:
             summary = asyncio.run(

@@ -438,6 +438,24 @@ def understand_secrets(assessment_id, target, inventory, request_fn, log=lambda 
     return creds, prov
 
 
+def _same_reg_domain(a: str, b: str) -> bool:
+    la, lb = a.lower().split(":")[0].split("."), b.lower().split(":")[0].split(".")
+    return la[-2:] == lb[-2:] and len(la) >= 2 and len(lb) >= 2
+
+
+def _apply_scope(inventory: list[dict], target: str, scope) -> list[dict]:
+    """Auto-include app-reached hosts on the target's registrable domain, then drop
+    anything the scope excludes. Cross-domain hosts need an explicit --scope entry."""
+    if scope is None:
+        return inventory
+    thost = urlparse(target).netloc.lower()
+    for it in inventory:
+        h = urlparse(it["url"]).netloc.lower()
+        if h and _same_reg_domain(h, thost):
+            scope.allow_host(h)
+    return [it for it in inventory if scope.in_scope(it["url"])]
+
+
 def run_recon(
     assessment_id: str,
     target: str,
@@ -447,6 +465,7 @@ def run_recon(
     max_pages: int = 25,
     network_recon_enabled: bool = False,
     browser_recon_enabled: bool = False,
+    scope=None,
     log: Callable[[str], None] = lambda m: None,
 ) -> tuple[str, dict, str]:
     """Unified recon pipeline. ALWAYS runs unauthenticated recon first, then
@@ -474,6 +493,7 @@ def run_recon(
     unauth_inv, header = _collect_surface(
         assessment_id, target, {}, sandbox_client,
         max_pages=max_pages, browser_recon_enabled=browser_recon_enabled, log=log)
+    unauth_inv = _apply_scope(unauth_inv, target, scope)
     unauth_keys = {(it["method"], it["url"], tuple(sorted(it["params"]))) for it in unauth_inv}
 
     # resolve credentials: operator-supplied first, else discovered in unauth artifacts
@@ -500,7 +520,7 @@ def run_recon(
             key = (it["method"], it["url"], tuple(sorted(it["params"])))
             if key not in unauth_keys:
                 it["source"] = f"auth/{it.get('source', 'link')}"  # mark authenticated-only surface
-        inv = _dedup(unauth_inv + auth_inv)
+        inv = _apply_scope(_dedup(unauth_inv + auth_inv), target, scope)
 
     persist(assessment_id, inv)
     text = header + "\n\n" + render_inventory(inv)
