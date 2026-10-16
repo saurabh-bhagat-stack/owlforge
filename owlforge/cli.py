@@ -88,6 +88,7 @@ def run(
     network_recon: bool = typer.Option(False, "--network-recon", help="Also run port/service discovery (nmap)."),
     browser_recon: bool = typer.Option(False, "--browser-recon", help="Headless-Chromium render (SPA recon)."),
     nuclei: bool = typer.Option(False, "--nuclei", help="Run nuclei (full templates) as a signal source — slower."),
+    deepen: bool = typer.Option(False, "--deepen", help="Escalate validated findings to read-only proof (slower)."),
     orchestrate: bool = typer.Option(True, "--orchestrate/--single", help="Multi-agent default (--single = one agent)"),
     scope_in: list[str] = typer.Option(None, "--scope", help="Extra in-scope host or host/path glob (repeatable)."),  # noqa: B008
     scope_out: list[str] = typer.Option(None, "--out-of-scope", help="Out-of-scope host/path glob (repeatable; wins)."),  # noqa: B008
@@ -299,6 +300,13 @@ def run(
         emit("status", "validation phase")
         vcounts = asyncio.run(validate_findings(assessment_id=aid, sandbox=sandbox_client, emit=emit,
                                                 session_headers=session_headers, identities=identity_set))
+        if deepen and vcounts.get("validated", 0) > 0:
+            from owlforge.engine.deepen import deepen_findings
+            try:
+                asyncio.run(deepen_findings(assessment_id=aid, client=client, sandbox=sandbox_client,
+                            emit=emit, session_headers=session_headers))
+            except Exception as e:
+                emit("log", f"deepen phase failed: {e}")
         emit("status", f"validation — {vcounts['validated']} validated, "
                        f"{vcounts['rejected']} rejected, {vcounts['manual']} manual")
         from owlforge.engine.validate import dedupe_findings
