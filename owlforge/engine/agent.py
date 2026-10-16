@@ -24,6 +24,7 @@ async def run_single_agent(
     sandbox: SandboxClient | None = None,
     session_headers: dict | None = None,
     surface: str | None = None,
+    expected_signal: str = "",
 ) -> str:
     ctx = ToolContext(assessment_id=assessment_id, target=target, emit=emit, sandbox=sandbox,
                       session_headers=session_headers or {})
@@ -43,6 +44,7 @@ async def run_single_agent(
     wrapup_sent = False
     findings_created = 0
     finding_nudge_sent = False
+    bypass_nudge_sent = False
 
     for turn in range(1, max_turns + 1):
         emit("status", f"turn {turn}/{max_turns}")
@@ -98,6 +100,22 @@ async def run_single_agent(
                 last_summary = str(call.arguments.get("summary", "")).strip()
 
         if lifecycle:
+            if findings_created == 0 and not bypass_nudge_sent and expected_signal:
+                bypass_nudge_sent = True
+                from owlforge.engine.ledger import attempts_summary
+                tried = attempts_summary(assessment_id, limit=15)
+                emit("log", "finishing with 0 findings despite a pre-probe signal — pushing bypass attempts")
+                messages.append(Message(role="user", content=(
+                    f"A deterministic pre-probe ALREADY confirmed a live signal here: {expected_signal}. "
+                    "You filed 0 findings, so do NOT give up — the vector is live, you just have not landed "
+                    "it. Try BYPASS techniques before finishing: URL- and double-URL-encoding, HTML-entity / "
+                    "unicode escaping, a different injection context (HTML tag vs attribute vs JS string vs "
+                    "URL), case / comment / whitespace variation, and alternate parameters or HTTP methods. "
+                    "Use exec_command with the sandbox tools if http_request is being filtered. "
+                    + (f"Payloads already tried (do NOT repeat these):\n{tried}\n" if tried else "")
+                    + "When one works, call create_finding with the exact payload; only finish if you have "
+                    "genuinely exhausted these.")))
+                continue
             if (findings_created == 0 and not finding_nudge_sent
                     and _claims_unfiled_vuln(notes, last_summary)):
                 finding_nudge_sent = True

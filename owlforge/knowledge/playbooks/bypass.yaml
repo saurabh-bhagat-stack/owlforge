@@ -1,0 +1,17 @@
+name: bypass
+title: Filter / WAF bypass — don't give up on a confirmed signal
+priority: 2
+body: |
+  If a pre-probe or your own baseline shows a parameter IS reaching a sink (quote
+  changes the response, a marker reflects, an error leaks) but your straight payload is
+  blocked, escaped, or filtered — do NOT conclude "not exploitable". Try, in order:
+  - Encoding: URL-encode, double-URL-encode, HTML entities (&#x27;), unicode escapes,
+    overlong/mixed case (SeLeCt), null bytes, whitespace/newline/comment splitting
+    (/**/, --, #, %0a).
+  - Context: switch where the payload lands — HTML tag vs attribute vs JS string vs URL
+    vs JSON body; break out of the exact quoting you observed.
+  - Transport: move the param between query / body / JSON / header; try another HTTP
+    method; add duplicate parameters (HTTP parameter pollution).
+  - Tooling: when http_request is filtered, drive curl / ffuf through exec_command.
+  File the finding with the EXACT payload that worked. Only give up after genuinely
+  exhausting these on a confirmed signal.

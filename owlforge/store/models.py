@@ -108,3 +108,18 @@ class SurfaceItem(SQLModel, table=True):
     params: list[str] = Field(default_factory=list, sa_column=Column(JSON))
     source: str = "link"  # link | form | seed
     created_at: datetime = Field(default_factory=_now)
+
+
+class Attempt(SQLModel, table=True):
+    """One probe/exploit attempt against a target — the attempt ledger. Lets specialists
+    and the bypass loop avoid repeating payloads and know what already failed."""
+
+    id: str = Field(primary_key=True)
+    assessment_id: str = Field(index=True)
+    url: str
+    method: str = "GET"
+    param: str = ""
+    payload: str = ""
+    status: int = 0
+    note: str = ""
+    created_at: datetime = Field(default_factory=_now)

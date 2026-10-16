@@ -75,6 +75,11 @@ async def _http_request(args: dict[str, Any], ctx: ToolContext) -> str:
             return f"error: {type(e).__name__}: {e}"
     if "error" in d:
         return f"error: {d['error']}"
+    try:
+        from owlforge.engine.ledger import record_attempt
+        record_attempt(ctx.assessment_id, url, method, args.get("params") or None, d.get("status"))
+    except Exception:
+        pass
     hdrs = {k: v for k, v in list(d.get("headers", {}).items())[:15]}
     return (f"status={d.get('status')}\nfinal_url={d.get('final_url')}\n"
             f"headers={hdrs}\nbody[:3000]:\n{str(d.get('body', ''))[:3000]}")

@@ -154,7 +154,8 @@ async def run_orchestrated(
         instr = (
             f"You are a {_TITLE[cls]} specialist. Test ONLY for {_TITLE[cls]} on the targets below — "
             f"nothing else. Signal of success: {_HINT[cls]}. Use http_request (put RAW payloads in "
-            f"params; do not url-encode). Test each target's parameter. The moment you CONFIRM an issue, "
+            f"params; do not url-encode); you may also use exec_command (curl, ffuf, nuclei, the sandbox "
+            f"toolkit) when a request is filtered. Test each target's parameter. The moment you CONFIRM an issue, "
             "call create_finding with severity, a proof_of_concept, and a STRUCTURED repro: "
             "repro_url (the endpoint), repro_params with the EXACT raw payload value that triggered it, "
             "and success_signal (text present ONLY when vulnerable, e.g. 500). Then call finish. Do not "
@@ -165,6 +166,7 @@ async def run_orchestrated(
                 client=client, registry=registry, emit=emit, assessment_id=assessment_id,
                 target=target, instructions=instr, scan_mode=scan_mode, max_turns=max_turns,
                 sandbox=sandbox, session_headers=session_headers, surface=_targets_text(targets),
+                expected_signal="; ".join(probe_notes[:4]),
             )
         except Exception as e:
             emit("error", f"specialist {cls} crashed: {type(e).__name__}: {e}")
