@@ -297,3 +297,34 @@ def test_access_control_stays_manual_without_session(isolated):
         assessment_id="asmt_x", sandbox=_DiffSandbox(protected=True),
         emit=Emitter("asmt_x", persist=False), session_headers=None))
     assert counts["manual"] == 1
+
+
+def test_understand_secrets_files_and_validates_info_disclosure(isolated):
+    from owlforge.engine.recon import understand_secrets
+    from owlforge.engine.validate import validate_findings
+    from owlforge.store.models import Finding
+
+    leak = 'const cfg = { stripe: "sk_live_ABCDEF0123456789abcdef" };'
+
+    def reqfn(method, url, headers=None, params=None, body=None):
+        if url.endswith("/static/app.js"):
+            return {"status": 200, "body": leak}
+        return {"status": 404, "body": ""}
+
+    inv = [{"url": "https://t/static/app.js", "method": "GET", "params": [], "source": "js"}]
+    creds, prov = understand_secrets("asmt_x", "https://t/", inv, reqfn)
+
+    with isolated.session() as sess:
+        rows = [f for f in sess.exec(__import__("sqlmodel").select(Finding)).all()]
+    assert len(rows) == 1
+    f = rows[0]
+    assert f.status == "candidate" and "Information disclosure" in f.title
+    assert f.evidence == "sk_live_ABCDEF0123456789abcdef"      # full value kept as proof
+
+    # the existing evidence gate re-fetches and confirms the secret is actually served
+    class _ServesSecret:
+        def http_request(self, method, url, *, headers=None, params=None, body=None, timeout_ms=60_000):
+            return {"status": 200, "headers": {}, "body": leak}
+    counts = asyncio.run(validate_findings(
+        assessment_id="asmt_x", sandbox=_ServesSecret(), emit=Emitter("asmt_x", persist=False)))
+    assert counts["validated"] == 1

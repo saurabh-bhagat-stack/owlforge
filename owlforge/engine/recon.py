@@ -286,60 +286,111 @@ def recon_phase(
     return text
 
 
-# Credential patterns scanned in UNAUTH artifacts (JS bundles, exposed files).
-# Secret VALUES are never logged or returned — only their provenance (where found).
-_CRED_PATTERNS = [
-    ("bearer", re.compile(r"""[Aa]uthorization["']?\s*[:=]\s*["']?Bearer\s+([A-Za-z0-9._\-]{20,})""")),
-    ("jwt", re.compile(r"\b(eyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,})\b")),
-    ("basic_url", re.compile(r"""https?://([^/\s:@"']{1,64}):([^/\s@"']{1,64})@""")),
-    ("api_key", re.compile(r"""(?:api[_-]?key|x-api-key|apikey)["']?\s*[:=]\s*["']([A-Za-z0-9._\-]{16,})["']""", re.I)),
-]
 _EXPOSED_FILES = (".env", "config.json", "config.js", ".git/config", "credentials.json",
-                  "secrets.json", "backup.sql", ".aws/credentials")
+                  "secrets.json", "backup.sql", ".aws/credentials", "appsettings.json")
 
 
-def discover_credentials(
-    target: str,
-    inventory: list[dict],
-    sandbox_client,
-    request_fn: RequestFn,
-    log: Callable[[str], None] = lambda m: None,
-) -> tuple[dict, str]:
-    """Scan unauth recon artifacts (JS bundles + common exposed files) for leaked
-    credentials. Returns (session_headers, provenance). Conservative: only a
-    high-confidence hit escalates. Secret values are never logged/returned."""
-    import base64 as _b64
+def _scan_sources(target, inventory, request_fn, log=lambda m: None):
+    """Fetch the candidate sources (pages + JS + common exposed files) and scan each
+    for secrets. Returns [(url, Secret), ...]. Values are kept in full (proof)."""
+    from owlforge.engine import secrets as secret_scan
 
     base = target.rstrip("/")
-    candidates = [base + "/" + f for f in _EXPOSED_FILES]
-    candidates += [it["url"] for it in inventory if it.get("url", "").endswith(".js")][:8]
+    pages = [it["url"] for it in inventory
+             if it.get("source") in ("link", "content-discovery", "html", "form")][:10]
+    js = [it["url"] for it in inventory if it.get("url", "").endswith(".js")][:12]
+    exposed = [base + "/" + f for f in _EXPOSED_FILES]
+    seen_urls: list[str] = []
+    for u in [base, *pages, *js, *exposed]:
+        if u not in seen_urls:
+            seen_urls.append(u)
 
-    for url in candidates:
+    out = []
+    for url in seen_urls:
         try:
             r = request_fn("GET", url) or {}
         except Exception:
             continue
         if r.get("error") or int(r.get("status") or 0) >= 400:
             continue
-        body = r.get("body") or ""
-        if not body:
-            continue
-        where = urlparse(url).path or url
-        for kind, pat in _CRED_PATTERNS:
-            m = pat.search(body)
-            if not m:
-                continue
-            if kind in ("bearer", "jwt"):
-                log(f"discovered bearer/JWT credential in {where}")
-                return {"Authorization": f"Bearer {m.group(1)}"}, f"bearer token in {where}"
-            if kind == "basic_url":
-                enc = _b64.b64encode(f"{m.group(1)}:{m.group(2)}".encode()).decode()
-                log(f"discovered HTTP basic credentials in {where}")
-                return {"Authorization": f"Basic {enc}"}, f"basic-auth in {where}"
-            if kind == "api_key":
-                log(f"discovered API key in {where}")
-                return {"X-API-Key": m.group(1)}, f"api key in {where}"
+        for sec in secret_scan.scan_text(r.get("body") or ""):
+            out.append((url, sec))
+    if out:
+        log(f"secret scan: {len(out)} sensitive item(s) across {len(seen_urls)} source(s)")
+    return out
+
+
+def discover_credentials(target, inventory, sandbox_client, request_fn, log=lambda m: None):
+    """Return (session_headers, provenance) for the first USABLE credential leaked in
+    unauth artifacts — for auto-escalation to authenticated recon. Secret values are
+    never put in the provenance string (only where it was found)."""
+    from urllib.parse import urlparse
+
+    from owlforge.engine import secrets as secret_scan
+
+    for url, sec in _scan_sources(target, inventory, request_fn, log=log):
+        headers = secret_scan.to_session_header(sec)
+        if headers:
+            where = urlparse(url).path or url
+            return headers, f"{sec.kind} in {where}"
     return {}, ""
+
+
+def _file_info_disclosure(assessment_id, url, sec):
+    """Persist one leaked secret as an information-disclosure finding. The full value
+    is the proof (evidence); success_signal lets the evidence gate re-fetch and confirm
+    the secret is actually served."""
+    from urllib.parse import urlparse
+
+    from owlforge.store.db import session
+    from owlforge.store.models import Finding
+
+    path = urlparse(url).path or url
+    sig = sec.value[:48]
+    with session() as s:
+        s.add(Finding(
+            id=f"find_{secrets.token_hex(5)}",
+            assessment_id=assessment_id,
+            title=f"Information disclosure: {sec.kind} exposed in {path}",
+            severity=sec.severity,
+            endpoint=url,
+            method="GET",
+            technical_analysis=(f"A {sec.kind} is served in the response body of {url}. "
+                                "Sensitive material reachable by an unauthenticated client "
+                                "is an information-disclosure / secrets-exposure issue."),
+            proof_of_concept=f"{sec.kind} = {sec.value}\ncontext: {sec.context}",
+            impact=("Leaked credentials/keys can be reused to access the service, its data, "
+                    "or connected systems, depending on the secret's scope."),
+            remediation=("Remove the secret from client-served content, rotate it immediately, "
+                         "and serve secrets only from server-side configuration."),
+            evidence=sec.value,
+            repro_url=url, repro_method="GET", success_signal=sig,
+            status="candidate",
+        ))
+        s.commit()
+
+
+def understand_secrets(assessment_id, target, inventory, request_fn, log=lambda m: None):
+    """UNDERSTAND step: scan pages + JS + exposed files for secrets/sensitive info,
+    FILE each as an information-disclosure finding (full value as proof), and return
+    (session_headers, provenance) for the first usable credential to escalate auth."""
+    from urllib.parse import urlparse
+
+    from owlforge.engine import secrets as secret_scan
+
+    creds: dict = {}
+    prov = ""
+    filed = 0
+    for url, sec in _scan_sources(target, inventory, request_fn, log=log):
+        _file_info_disclosure(assessment_id, url, sec)
+        filed += 1
+        if not creds:
+            h = secret_scan.to_session_header(sec)
+            if h:
+                creds, prov = h, f"{sec.kind} in {urlparse(url).path or url}"
+    if filed:
+        log(f"understand: filed {filed} information-disclosure finding(s)")
+    return creds, prov
 
 
 def run_recon(
@@ -387,11 +438,11 @@ def run_recon(
         session_headers = establish_session(user_auth, _reqfn, log=log)
         if session_headers:
             auth_summary = f"authenticated (operator {user_auth.mode})"
-    if not session_headers:
-        disc_headers, prov = discover_credentials(target, unauth_inv, sandbox_client, _reqfn, log=log)
-        if disc_headers:
-            session_headers = disc_headers
-            auth_summary = f"authenticated (auto-escalated: {prov})"
+    log("understand: scanning pages/JS/files for secrets & sensitive info")
+    disc_headers, prov = understand_secrets(assessment_id, target, unauth_inv, _reqfn, log=log)
+    if not session_headers and disc_headers:
+        session_headers = disc_headers
+        auth_summary = f"authenticated (auto-escalated: {prov})"
 
     inv = unauth_inv
     # pass 2: authenticated (only if a session was resolved)
