@@ -289,6 +289,13 @@ def run(
                     surface=surface_text or None,
                 )
             )
+        try:
+            from owlforge.engine.orchestrator import read_blackboard
+            from owlforge.engine.stored import stored_scan
+            stored_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                        log=lambda m: emit("status", m))
+        except Exception as e:
+            emit("log", f"stored pass failed: {type(e).__name__}: {e}")
         emit("status", "validation phase")
         vcounts = asyncio.run(validate_findings(assessment_id=aid, sandbox=sandbox_client, emit=emit,
                                                 session_headers=session_headers, identities=identity_set))
