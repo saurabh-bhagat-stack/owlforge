@@ -1,0 +1,10 @@
+name: websocket
+title: WebSocket / SignalR testing
+priority: 6
+body: |
+  Surface: ws:// or wss:// endpoints, SignalR hubs (/hub, /negotiate), Blazor Server
+  circuits (_blazor over WebSocket). Connect and test: does the socket require auth /
+  check Origin (connect cross-origin)? Are messages reflected to other clients
+  (WS-delivered stored XSS)? Do message fields reach SQL/NoSQL/command sinks (inject in
+  JSON values)? Can you tamper with other users' data by changing ids in messages
+  (IDOR over WS)? Confirm with a reflected marker or a boundary violation; read-only.

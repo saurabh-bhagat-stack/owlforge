@@ -85,6 +85,16 @@ class SandboxClient:
         r.raise_for_status()
         return r.json()
 
+    def ws_probe(self, url: str, *, messages: list[str] | None = None,
+                 headers: dict | None = None, timeout_ms: int = 8000) -> dict:
+        """Connect to a WebSocket, send messages, return responses."""
+        r = httpx.post(f"{self.base_url}/ws_probe", headers=self._headers(),
+                       json={"url": url, "messages": messages, "headers": headers,
+                             "timeout_ms": timeout_ms},
+                       timeout=max(self.timeout, timeout_ms / 1000 + 10))
+        r.raise_for_status()
+        return r.json()
+
     def interact(self, url: str, token: str, *, headers: dict | None = None,
                  check_url: str | None = None, timeout_ms: int = 20_000) -> dict:
         """Browser-driven form interaction (fill inputs + submit + observe)."""

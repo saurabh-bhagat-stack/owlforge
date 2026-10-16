@@ -47,6 +47,7 @@ RUN python3 -m venv /opt/owlforge/venv \
 RUN /opt/owlforge/venv/bin/playwright install --with-deps chromium
 # bake nuclei templates (full set) so --nuclei scans are fast + reproducible
 RUN nuclei -update-templates -disable-update-check 2>/dev/null || echo "WARN: nuclei template fetch failed"
+RUN /opt/owlforge/venv/bin/pip install "websockets>=12"
 COPY mitm /opt/owlforge/mitm-addons
 COPY wordlists /opt/owlforge/wordlists
 COPY entrypoint.sh /opt/owlforge/entrypoint.sh

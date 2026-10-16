@@ -448,3 +448,47 @@ async def interact(req: InteractRequest) -> dict:
     elif any(req.token in d for d in dialogs):
         executed, via = True, "dialog"
     return {"submitted": filled > 0, "filled": filled, "executed": executed, "via": via}
+
+
+
+class WsProbeRequest(BaseModel):
+    url: str
+    messages: list[str] | None = None
+    headers: dict[str, str] | None = None
+    timeout_ms: int = 8000
+
+
+@app.post("/ws_probe", dependencies=[Depends(auth)])
+async def ws_probe(req: WsProbeRequest) -> dict:
+    """Connect to a WebSocket, send message(s), and return the responses — so WS
+    endpoints can be tested (injection / auth / echo) like any other surface."""
+    import asyncio
+
+    try:
+        import websockets
+    except Exception as e:
+        return {"error": f"websockets unavailable: {e}"}
+    responses: list[str] = []
+    err = ""
+    try:
+        kw = {"open_timeout": req.timeout_ms / 1000, "close_timeout": 2}
+        try:
+            ws = await websockets.connect(req.url, additional_headers=req.headers or {}, **kw)
+        except TypeError:
+            ws = await websockets.connect(req.url, extra_headers=req.headers or {}, **kw)
+        try:
+            try:
+                responses.append(str(await asyncio.wait_for(ws.recv(), timeout=2))[:500])
+            except Exception:
+                pass
+            for m in (req.messages or ["ping"]):
+                try:
+                    await ws.send(m)
+                    responses.append(str(await asyncio.wait_for(ws.recv(), timeout=3))[:500])
+                except Exception as e:
+                    responses.append(f"__err__:{type(e).__name__}")
+        finally:
+            await ws.close()
+    except Exception as e:
+        err = f"{type(e).__name__}: {e}"
+    return {"connected": err == "", "error": err, "responses": responses[:10]}

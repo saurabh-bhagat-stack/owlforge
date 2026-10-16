@@ -281,14 +281,27 @@ def js_recon(
 ) -> list[dict]:
     origin = _origin(target)
     r = request_fn("GET", target) or {}
-    srcs = extract_script_srcs(target, r.get("body", "") or "")
+    main_html = r.get("body", "") or ""
+    srcs = extract_script_srcs(target, main_html)
     endpoints: list[dict] = []
     loose_params: set[str] = set()
+    transport_text = main_html
     for src in srcs[:max_js]:
         jr = request_fn("GET", src) or {}
-        eps, loose = extract_js_endpoints(origin, jr.get("body", "") or "")
+        jsbody = jr.get("body", "") or ""
+        transport_text += "\n" + jsbody
+        eps, loose = extract_js_endpoints(origin, jsbody)
         endpoints.extend(eps)
         loose_params |= loose
+
+    # transport detection: WebSocket / SignalR endpoints + Blazor flags
+    from owlforge.engine.transport import detect_transport, ws_surface_items
+    _ws, _flags = detect_transport(target, transport_text)
+    if _ws:
+        endpoints.extend(ws_surface_items(_ws))
+    if _flags:
+        log(f"transport: detected {', '.join(sorted(_flags))}"
+            + (f"; {len(_ws)} WebSocket endpoint(s)" if _ws else ""))
     # attach loose param names to the base app endpoints that have none, best-effort:
     if loose_params:
         for ep in endpoints:
