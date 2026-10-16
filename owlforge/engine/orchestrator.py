@@ -17,6 +17,8 @@ from owlforge.engine.classify import (
     CRLF,
     CSRF,
     DESER,
+    FILE_UPLOAD,
+    GRAPHQL,
     NOSQL,
     OBJECT_ID,
     OPEN_REDIRECT,
@@ -50,6 +52,8 @@ _TITLE = {
     NOSQL: "NoSQL injection",
     XXE: "XML external entity (XXE) injection",
     DESER: "insecure deserialization",
+    FILE_UPLOAD: "unrestricted file upload (webshell / RCE)",
+    GRAPHQL: "GraphQL abuse",
 }
 _HINT = {
     SQLI: "a lone single quote (') that makes the response error/500 and reverts to 200 when balanced ('')",
@@ -66,8 +70,12 @@ _HINT = {
     NOSQL: "operator injection (e.g. [$ne]/[$gt] or \'||1==1) changes auth/query behaviour",
     XXE: "an external entity is resolved (file read / SSRF via the XML parser)",
     DESER: "a crafted serialized object is deserialized (gadget -> code/behaviour change)",
+    FILE_UPLOAD: "a server-side-executable file (e.g. .php/.jsp) is accepted and then runs when fetched",
+    GRAPHQL: "introspection is open, or an argument is injectable / lets you read another object (IDOR)",
 }
-_ORDER = [RCE, SSTI, SQLI, NOSQL, XSS, PATH, XXE, DESER, OBJECT_ID, SSRF, OPEN_REDIRECT, CRLF, CSRF]
+_ORDER = [RCE, SSTI, SQLI, NOSQL, XSS, PATH, XXE, DESER, FILE_UPLOAD, GRAPHQL,
+          OBJECT_ID, SSRF, OPEN_REDIRECT, CRLF, CSRF]
+_FILE_PARAM = ("file", "upload", "attachment", "avatar", "document", "photo", "image", "userfile")
 _MAX_TARGETS = 8  # per specialist — test the highest-interest first, don't dilute budget
 
 
@@ -125,6 +133,17 @@ def plan_tasks(inventory: list[dict]) -> dict[str, list[dict]]:
             if key not in seen:
                 seen.add(key)
                 tasks[XXE].append({"url": it["url"], "method": it["method"], "param": None})
+        if it.get("source") == "graphql":
+            key = (GRAPHQL, it["method"], it["url"], None)
+            if key not in seen:
+                seen.add(key)
+                tasks[GRAPHQL].append({"url": it["url"], "method": it["method"], "param": "query"})
+        if it.get("method", "GET").upper() in ("POST", "PUT"):
+            for fp in [p for p in it.get("params", []) if any(f in p.lower() for f in _FILE_PARAM)]:
+                key = (FILE_UPLOAD, it["method"], it["url"], fp)
+                if key not in seen:
+                    seen.add(key)
+                    tasks[FILE_UPLOAD].append({"url": it["url"], "method": it["method"], "param": fp})
     return dict(tasks)
 
 

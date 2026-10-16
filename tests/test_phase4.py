@@ -237,3 +237,16 @@ def test_m6c_nosql_classify_and_xxe_dispatch():
     assert "https://t/soap/service" in xxe_urls           # soap in url
     assert "https://t/api/users" in xxe_urls              # api-spec source
     assert "https://t/catalog" not in xxe_urls            # plain GET page
+
+
+def test_m6d_file_upload_and_graphql_dispatch():
+    from owlforge.engine.classify import FILE_UPLOAD, GRAPHQL
+    from owlforge.engine.orchestrator import plan_tasks
+
+    tasks = plan_tasks([
+        {"url": "https://t/profile", "method": "POST", "params": ["avatar", "name"]},
+        {"url": "https://t/graphql", "method": "POST", "params": ["query"], "source": "graphql"},
+        {"url": "https://t/search", "method": "GET", "params": ["q"]},
+    ])
+    assert {x["param"] for x in tasks.get(FILE_UPLOAD, [])} == {"avatar"}
+    assert {x["url"] for x in tasks.get(GRAPHQL, [])} == {"https://t/graphql"}

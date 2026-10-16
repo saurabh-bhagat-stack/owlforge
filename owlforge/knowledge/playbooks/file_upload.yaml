@@ -1,0 +1,12 @@
+name: file_upload
+title: Unrestricted file upload (webshell / RCE)
+priority: 3
+body: |
+  Surface: multipart forms / endpoints with a file parameter (file, upload, avatar,
+  attachment, document, image). Test whether a server-side-executable file is accepted
+  and then served/executed. Use exec_command with curl -F when http_request can't do
+  multipart. Try: a benign marker file first (confirm the upload path + how it's named),
+  then a webshell with content-type/extension tricks (shell.php, shell.php.jpg,
+  shell.phtml, trailing dot/space, magic-byte prefix, null byte). PROOF (read-only):
+  fetch the uploaded file and show it executed a benign command (echo a unique marker /
+  id). Never leave a live shell or run destructive commands; note the upload URL.

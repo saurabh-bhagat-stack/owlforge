@@ -20,6 +20,8 @@ CRLF = "crlf"
 NOSQL = "nosql"
 XXE = "xxe"
 DESER = "deserialization"
+FILE_UPLOAD = "file_upload"
+GRAPHQL = "graphql"
 
 _ID = ("id", "productid", "userid", "orderid", "accountid", "docid", "itemid", "pid",
        "uid", "gid", "oid", "objectid", "invoiceid", "ticketid", "fileid")

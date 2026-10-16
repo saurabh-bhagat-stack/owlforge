@@ -1,0 +1,10 @@
+name: graphql
+title: GraphQL abuse
+priority: 4
+body: |
+  Surface: a GraphQL endpoint (/graphql, /api/graphql). First try INTROSPECTION
+  ({__schema{types{name}}}) — if open, map queries/mutations. Then test: injection via
+  string arguments (SQLi/NoSQL reach the resolver), IDOR via node(id:) / byId queries
+  (read another user's object), missing auth on sensitive fields/mutations, and
+  batching/alias abuse (many aliased queries in one request) for rate-limit / brute
+  bypass. Confirm with data you should not be able to read. Read-only.
