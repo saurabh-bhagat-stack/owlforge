@@ -15,6 +15,8 @@ SSRF = "ssrf_redirect"
 CSRF = "csrf"
 SSTI = "ssti"
 RCE = "rce"
+OPEN_REDIRECT = "open_redirect"
+CRLF = "crlf"
 
 _ID = ("id", "productid", "userid", "orderid", "accountid", "docid", "itemid", "pid",
        "uid", "gid", "oid", "objectid", "invoiceid", "ticketid", "fileid")
@@ -34,6 +36,8 @@ def classify_param(name: str) -> set[str]:
         tags.add(OBJECT_ID)
     if any(k in n for k in _URL):
         tags.add(SSRF)
+        tags.add(OPEN_REDIRECT)
+        tags.add(CRLF)
     if any(k in n for k in _PATH):
         tags.add(PATH)
     if any(k in n for k in _CMD):

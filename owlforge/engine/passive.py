@@ -121,6 +121,24 @@ def cors_reflection(url: str, request_fn: RequestFn) -> PassiveFinding | None:
     return None
 
 
+def host_header_injection(url, request_fn):
+    """Active probe: send a spoofed Host / X-Forwarded-Host and see if it is reflected
+    into the response (links, redirects) — host-header injection / cache poisoning."""
+    evil = "owl-hhi.example"
+    try:
+        r = request_fn("GET", url, headers={"Host": evil, "X-Forwarded-Host": evil}) or {}
+    except Exception:
+        return None
+    hdrs = {k.lower(): str(v) for k, v in (r.get("headers") or {}).items()}
+    if evil in hdrs.get("location", "") or evil in (r.get("body") or ""):
+        return PassiveFinding(
+            title="Host-header injection", severity="medium",
+            evidence=f"Host: {evil} -> reflected in response (link/redirect)",
+            detail="Server reflects an attacker-controlled Host/X-Forwarded-Host into links or "
+                   "redirects — enables password-reset poisoning and web-cache poisoning.", url=url)
+    return None
+
+
 def passive_scan(assessment_id: str, target: str, inventory: list[dict],
                  request_fn: RequestFn, log: Callable[[str], None] = lambda m: None) -> int:
     """Fetch the target + a few pages, run passive checks + a CORS probe, and file each
@@ -151,6 +169,9 @@ def passive_scan(assessment_id: str, target: str, inventory: list[dict],
     cors = cors_reflection(target, request_fn)
     if cors:
         results.append(cors)
+    hhi = host_header_injection(target, request_fn)
+    if hhi:
+        results.append(hhi)
 
     filed = 0
     with session() as s:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from owlforge.engine.passive import cors_reflection, scan_response
+from owlforge.engine.passive import cors_reflection, host_header_injection, scan_response
 
 
 def test_scan_response_flags_headers_cookies_cors_version_dirlisting():
@@ -67,3 +67,11 @@ def test_passive_scan_files_findings(tmp_path, monkeypatch):
     with db.session() as s:
         rows = s.exec(select(Finding).where(Finding.assessment_id == "asmt_p")).all()
     assert all(f.status == "candidate" and f.validation_note == "passive observation (deterministic)" for f in rows)
+
+
+def test_host_header_injection_probe():
+    def reqfn(method, url, headers=None, params=None, body=None):
+        h = (headers or {}).get("Host", "")
+        return {"headers": {"Location": f"https://{h}/reset?token=abc"}, "body": ""}
+    pf = host_header_injection("https://t/", reqfn)
+    assert pf and pf.severity == "medium" and "Host-header" in pf.title

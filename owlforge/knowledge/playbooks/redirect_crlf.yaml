@@ -1,0 +1,12 @@
+name: redirect_crlf
+title: Open redirect & CRLF / response-header injection
+priority: 5
+body: |
+  Open redirect: parameters like redirect, next, return, returnUrl, url, dest, continue,
+  goto. Put an off-site absolute URL (https://attacker.example/) and check the 3xx
+  Location (or meta-refresh / JS location) points off-site. Also try //attacker.example,
+  https:attacker.example, and whitelist bypasses (trusted.com.attacker.example).
+  CRLF / response-header injection: inject %0d%0a (CR LF) into a value that reaches a
+  response header (redirect Location, Set-Cookie, custom header). If you can add a new
+  header (e.g. Owl-Inject) or a Set-Cookie, it is exploitable (can lead to XSS / cache
+  poisoning). File with the exact payload and the injected header observed.

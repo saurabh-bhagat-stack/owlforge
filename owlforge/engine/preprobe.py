@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import secrets as _secrets
 
-from owlforge.engine.classify import PATH, RCE, SQLI, SSRF, SSTI, XSS
+from owlforge.engine.classify import CRLF, OPEN_REDIRECT, PATH, RCE, SQLI, SSRF, SSTI, XSS
 
 # classes with a cheap, sound single-request signal. access_control / csrf need a
 # differential and are NOT gated here (they pass through to the specialist/validator).
-GATEABLE = {SQLI, XSS, PATH, SSRF, SSTI, RCE}
+GATEABLE = {SQLI, XSS, PATH, SSRF, SSTI, RCE, OPEN_REDIRECT, CRLF}
 
 
 def _http(sandbox, method, url, params, headers):
@@ -80,6 +80,23 @@ def probe(cls: str, target: dict, sandbox, session_headers: dict | None = None) 
         hdrs = {k.lower(): str(v) for k, v in (r.get("headers") or {}).items()}
         if mark in hdrs.get("location", "") or mark in (r.get("body") or ""):
             return True, f"{p}: attacker URL reflected in redirect/body (SSRF/open-redirect)"
+        return False, ""
+
+    if cls == OPEN_REDIRECT:
+        from urllib.parse import urlparse as _up
+        evil = "https://owl-redir.example/"
+        r = _http(sandbox, method, url, {p: evil}, h)
+        hdrs = {k.lower(): str(v) for k, v in (r.get("headers") or {}).items()}
+        loc = hdrs.get("location", "")
+        if loc and _up(loc).netloc == "owl-redir.example":
+            return True, f"{p}: redirects off-site to {loc} (open redirect)"
+        return False, ""
+
+    if cls == CRLF:
+        r = _http(sandbox, method, url, {p: "x\r\nOwl-Inject: owl1"}, h)
+        hdrs = {k.lower(): str(v) for k, v in (r.get("headers") or {}).items()}
+        if "owl-inject" in hdrs:
+            return True, f"{p}: CRLF injected a response header (Owl-Inject)"
         return False, ""
 
     return True, ""

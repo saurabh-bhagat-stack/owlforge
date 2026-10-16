@@ -14,8 +14,10 @@ from sqlmodel import select
 
 from owlforge.engine.agent import run_single_agent
 from owlforge.engine.classify import (
+    CRLF,
     CSRF,
     OBJECT_ID,
+    OPEN_REDIRECT,
     PATH,
     RCE,
     SQLI,
@@ -40,6 +42,8 @@ _TITLE = {
     CSRF: "cross-site request forgery",
     SSTI: "server-side template injection",
     RCE: "OS command injection / RCE",
+    OPEN_REDIRECT: "open redirect",
+    CRLF: "CRLF / HTTP response-header injection",
 }
 _HINT = {
     SQLI: "a lone single quote (') that makes the response error/500 and reverts to 200 when balanced ('')",
@@ -51,8 +55,10 @@ _HINT = {
           "SameSite cookie or Origin/Referer check blocks a cross-site submission",
     SSTI: "a template expression is evaluated server-side (e.g. {{1337*1337}} -> 1787569); escalate to code/file read",
     RCE: "an injected OS command runs (e.g. ;id -> uid=.../gid=...); keep proof read-only (id/hostname)",
+    OPEN_REDIRECT: "an attacker URL in the parameter becomes the 3xx Location (off-site redirect)",
+    CRLF: "a newline in the parameter injects a new response header (e.g. an extra Set-Cookie)",
 }
-_ORDER = [RCE, SSTI, SQLI, XSS, PATH, OBJECT_ID, SSRF, CSRF]
+_ORDER = [RCE, SSTI, SQLI, XSS, PATH, OBJECT_ID, SSRF, OPEN_REDIRECT, CRLF, CSRF]
 _MAX_TARGETS = 8  # per specialist — test the highest-interest first, don't dilute budget
 
 

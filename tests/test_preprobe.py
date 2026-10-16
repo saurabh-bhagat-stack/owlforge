@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from owlforge.engine.classify import CSRF, PATH, RCE, SQLI, SSRF, SSTI, XSS
+from owlforge.engine.classify import CRLF, CSRF, OPEN_REDIRECT, PATH, RCE, SQLI, SSRF, SSTI, XSS
 from owlforge.engine.preprobe import filter_targets, probe
 
 
@@ -72,3 +72,26 @@ def test_probe_ssti_and_rce():
             return {"status": 200, "body": "nothing"}
     assert probe(SSTI, {"url": "https://t/x", "param": "p"}, Quiet())[0] is False
     assert probe(RCE, {"url": "https://t/x", "param": "p"}, Quiet())[0] is False
+
+
+def test_probe_open_redirect_and_crlf():
+    class RedirSB:
+        def http_request(self, method, url, *, params=None, headers=None, body=None, timeout_ms=60_000):
+            nxt = (params or {}).get("next", "")
+            return {"status": 302, "headers": {"Location": nxt}, "body": ""}
+    assert probe(OPEN_REDIRECT, {"url": "https://t/go", "param": "next"}, RedirSB())[0] is True
+
+    class CrlfSB:
+        def http_request(self, method, url, *, params=None, headers=None, body=None, timeout_ms=60_000):
+            v = (params or {}).get("next", "")
+            hdrs = {"Location": "/x"}
+            if "Owl-Inject" in v:            # the client/server split the header
+                hdrs["Owl-Inject"] = "owl1"
+            return {"status": 302, "headers": hdrs, "body": ""}
+    assert probe(CRLF, {"url": "https://t/go", "param": "next"}, CrlfSB())[0] is True
+
+    class Safe:
+        def http_request(self, method, url, *, params=None, headers=None, body=None, timeout_ms=60_000):
+            return {"status": 200, "headers": {"Location": "/home"}, "body": "ok"}
+    assert probe(OPEN_REDIRECT, {"url": "https://t/go", "param": "next"}, Safe())[0] is False
+    assert probe(CRLF, {"url": "https://t/go", "param": "next"}, Safe())[0] is False
