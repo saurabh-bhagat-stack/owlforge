@@ -1,0 +1,15 @@
+name: privesc
+title: Broken access control — horizontal & vertical privilege escalation
+priority: 2
+body: |
+  With multiple identities (anon, user A, user B, low-priv, admin): for each object or
+  action, establish what the OWNER/authorized identity sees, then replay the exact
+  request as a DIFFERENT / lower-privilege identity.
+  - Horizontal (IDOR): user B retrieves user A's object (change id / use B's session on
+    A's resource) and sees A's data.
+  - Vertical: a low-priv or anonymous identity reaches an admin-only endpoint/action
+    (forced browsing, role/claim tampering: JWT role=admin, hidden form fields, mass
+    assignment) and it works.
+  Confirmed when a lower/other identity reads or performs what only the authorized one
+  should. owlforge validates these by cross-identity differential (same resource, same
+  content, wrong identity). Read-only proof.

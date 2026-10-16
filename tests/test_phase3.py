@@ -379,3 +379,55 @@ def test_dedupe_keeps_distinct_observational_titles_same_endpoint(isolated):
                 if f.assessment_id == "asmt_o" and f.status != "duplicate"}
     assert kept == {"Missing Content-Security-Policy", "Missing HSTS",
                     "Missing X-Content-Type-Options: nosniff"}
+
+
+def test_cross_identity_validates_vertical_privesc(isolated):
+    from owlforge.engine.validate import validate_findings
+    from owlforge.store.models import Finding
+
+    def seed(fid):
+        with isolated.session() as s:
+            s.add(Finding(id=fid, assessment_id="asmt_pe", title="Broken Access Control on /admin/report",
+                          severity="high", status="candidate", repro_url="https://t/admin/report",
+                          repro_method="GET"))
+            s.commit()
+
+    class _IdSB:
+        """admin + low-priv user both read the resource (privesc); anon is denied."""
+        def http_request(self, method, url, *, headers=None, params=None, body=None, timeout_ms=60_000):
+            cookie = (headers or {}).get("Cookie", "")
+            if cookie in ("a", "u"):
+                return {"status": 200, "headers": {}, "body": "ADMIN REPORT: revenue=... " * 6}
+            return {"status": 401, "headers": {}, "body": "no"}
+
+    ids = [{"label": "admin", "role": "admin", "headers": {"Cookie": "a"}},
+           {"label": "low", "role": "user", "headers": {"Cookie": "u"}},
+           {"label": "anon", "role": "anonymous", "headers": {}}]
+    seed("pe1")
+    counts = asyncio.run(validate_findings(
+        assessment_id="asmt_pe", sandbox=_IdSB(), emit=Emitter("asmt_pe", persist=False), identities=ids))
+    assert counts["validated"] == 1
+    with isolated.session() as s:
+        assert "vertical" in (s.get(Finding, "pe1").validation_note or "")
+
+
+def test_cross_identity_rejects_when_boundary_enforced(isolated):
+    from owlforge.engine.validate import validate_findings
+    from owlforge.store.models import Finding
+
+    with isolated.session() as s:
+        s.add(Finding(id="pe2", assessment_id="asmt_pe2", title="IDOR on /admin/report", severity="high",
+                      status="candidate", repro_url="https://t/admin/report", repro_method="GET"))
+        s.commit()
+
+    class _OnlyAdmin:
+        def http_request(self, method, url, *, headers=None, params=None, body=None, timeout_ms=60_000):
+            if (headers or {}).get("Cookie") == "a":
+                return {"status": 200, "headers": {}, "body": "ADMIN REPORT " * 10}
+            return {"status": 403, "headers": {}, "body": "forbidden"}
+
+    ids = [{"label": "admin", "role": "admin", "headers": {"Cookie": "a"}},
+           {"label": "low", "role": "user", "headers": {"Cookie": "u"}}]
+    counts = asyncio.run(validate_findings(
+        assessment_id="asmt_pe2", sandbox=_OnlyAdmin(), emit=Emitter("asmt_pe2", persist=False), identities=ids))
+    assert counts["rejected"] == 1 and counts["validated"] == 0

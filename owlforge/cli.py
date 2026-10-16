@@ -208,6 +208,8 @@ def run(
                           + (f"; SSO pending: {', '.join(_pending)}" if _pending else "") + "[/]")
             if _prim and _prim.session_headers:
                 user_auth = AuthContext(mode="session", headers=_prim.session_headers)
+            identity_set = [{"label": i.label, "role": i.role, "headers": i.session_headers}
+                            for i in _idents if i.session_headers or i.role == "anonymous"]
         except Exception as e:
             console.print(f"[yellow]identities load failed: {e}[/]")
 
@@ -227,6 +229,7 @@ def run(
     ]
     console.print(Panel.fit(chr(10).join(panel), title="assessment started", border_style="cyan"))
 
+    identity_set = None
     from owlforge.engine.scope import build_scope
     scope = build_scope(target, scope=scope_in, out_of_scope=scope_out,
                         only=(only.split(",") if only else None))
@@ -288,7 +291,7 @@ def run(
             )
         emit("status", "validation phase")
         vcounts = asyncio.run(validate_findings(assessment_id=aid, sandbox=sandbox_client, emit=emit,
-                                                session_headers=session_headers))
+                                                session_headers=session_headers, identities=identity_set))
         emit("status", f"validation — {vcounts['validated']} validated, "
                        f"{vcounts['rejected']} rejected, {vcounts['manual']} manual")
         from owlforge.engine.validate import dedupe_findings

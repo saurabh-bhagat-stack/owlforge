@@ -83,6 +83,7 @@ async def _browser_confirm_xss(sandbox: SandboxClient, rurl: str, rparams: dict)
 async def validate_findings(
     *, assessment_id: str, sandbox: SandboxClient | None, emit: Emitter,
     session_headers: dict | None = None,
+    identities: list[dict] | None = None,
 ) -> dict[str, int]:
     with session() as s:
         rows = s.exec(
@@ -96,27 +97,29 @@ async def validate_findings(
     counts = {"validated": 0, "rejected": 0, "manual": 0}
     for fid, repro, signal, title, rmethod, rurl, rparams, rbody in items:
         if _needs_differential(title):
-            if sandbox is not None and session_headers and rurl.strip():
-                verdict, note = await _differential_access(
-                    sandbox, rmethod, rurl, rparams, rbody, session_headers)
-                if verdict == "validated":
-                    _set(fid, "validated", confidence="high", note=note)
-                    counts["validated"] += 1
-                    emit("finding_validated", f"VALIDATED: {title}")
-                    continue
-                if verdict == "rejected":
-                    _set(fid, "false_positive", note=note)
-                    counts["rejected"] += 1
-                    emit("finding_rejected", f"rejected ({note}): {title}")
-                    continue
-                _set(fid, "candidate", note=f"access-control needs manual review — {note}")
-                counts["manual"] += 1
-                emit("log", f"access-control inconclusive (manual): {title}")
+            verdict, note = None, ""
+            if sandbox is not None and rurl.strip():
+                if identities and sum(1 for i in identities if i.get("headers")) >= 1:
+                    verdict, note = await _cross_identity_access(
+                        sandbox, rmethod, rurl, rparams, rbody, identities)
+                elif session_headers:
+                    verdict, note = await _differential_access(
+                        sandbox, rmethod, rurl, rparams, rbody, session_headers)
+            if verdict == "validated":
+                _set(fid, "validated", confidence="high", note=note)
+                counts["validated"] += 1
+                emit("finding_validated", f"VALIDATED: {title}")
+                continue
+            if verdict == "rejected":
+                _set(fid, "false_positive", note=note)
+                counts["rejected"] += 1
+                emit("finding_rejected", f"rejected ({note}): {title}")
                 continue
             _set(fid, "candidate", note=("access-control/IDOR needs differential testing "
-                 "(authorized vs unauthorized / two accounts) — no session available to auto-test"))
+                 + (f"— {note}" if note else "(authorized vs unauthorized / two accounts) "
+                    "— no session/identities available to auto-test")))
             counts["manual"] += 1
-            emit("log", f"access-control finding kept as candidate (needs differential): {title}")
+            emit("log", f"access-control kept as candidate (manual): {title}")
             continue
         if not (rurl.strip() or repro.strip()):
             _set(fid, "candidate", note="no repro supplied — manual validation required")
@@ -194,6 +197,44 @@ def _similar(a: str, b: str) -> bool:
     if la == 0 or lb == 0:
         return False
     return min(la, lb) / max(la, lb) >= 0.9
+
+
+_ROLE_RANK = {"admin": 3, "superuser": 3, "root": 3, "user": 2, "anonymous": 1, "anon": 1}
+
+
+async def _cross_identity_access(
+    sandbox: SandboxClient, method: str, url: str, params: dict, body: str, identities: list[dict]
+) -> tuple[str, str]:
+    """Confirm privilege escalation across the identity set: fetch the resource as the
+    highest-privilege identity (baseline), then as every lower one (and anon). A lower
+    identity reading the SAME resource = broken access control (vertical if its role is
+    lower, horizontal/IDOR if same role). Sound: it probes the authz boundary directly."""
+    from owlforge.tools.builtin import _normalize_params
+
+    norm = _normalize_params(params) if params else None
+    m = method or "GET"
+    ids = sorted(identities, key=lambda i: _ROLE_RANK.get((i.get("role") or "user").lower(), 2),
+                 reverse=True)
+    base = ids[0]
+    base_rank = _ROLE_RANK.get((base.get("role") or "user").lower(), 2)
+    ab = await asyncio.to_thread(sandbox.http_request, m, url,
+                                 headers=base.get("headers") or {}, params=norm, body=(body or None))
+    ab_body = ab.get("body") or ""
+    if int(ab.get("status") or 0) != 200 or len(ab_body) < 50:
+        return ("inconclusive", f"baseline identity '{base.get('label')}' got status "
+                                f"{ab.get('status')} (not a usable resource)")
+    for idn in ids[1:]:
+        r = await asyncio.to_thread(sandbox.http_request, m, url,
+                                    headers=idn.get("headers") or {}, params=norm, body=(body or None))
+        bd = r.get("body") or ""
+        if int(r.get("status") or 0) == 200 and len(bd) >= 50 and _similar(ab_body, bd) \
+                and not _looks_like_login(bd):
+            irank = _ROLE_RANK.get((idn.get("role") or "user").lower(), 2)
+            kind = "vertical privilege escalation" if irank < base_rank else "horizontal access (IDOR)"
+            return ("validated", f"broken access control ({kind}): identity '{idn.get('label')}' "
+                                 f"(role {idn.get('role')}) reads the same resource as "
+                                 f"'{base.get('label')}'")
+    return ("rejected", "boundary enforced: only the authorized identity can read the resource")
 
 
 async def _differential_access(
