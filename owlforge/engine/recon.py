@@ -522,6 +522,18 @@ def run_recon(
                 it["source"] = f"auth/{it.get('source', 'link')}"  # mark authenticated-only surface
         inv = _apply_scope(_dedup(unauth_inv + auth_inv), target, scope)
 
+    # passive configuration/observational checks (deterministic, session-aware)
+    try:
+        from owlforge.engine.passive import passive_scan
+
+        def _sreq(method, url, headers=None, params=None, body=None):
+            hdrs = {**(session_headers or {}), **(headers or {})} or None
+            return _reqfn(method, url, headers=hdrs, params=params, body=body)
+
+        passive_scan(assessment_id, target, inv, _sreq, log=log)
+    except Exception as e:
+        log(f"passive scan failed: {e}")
+
     persist(assessment_id, inv)
     text = header + "\n\n" + render_inventory(inv)
     if network_recon_enabled:
