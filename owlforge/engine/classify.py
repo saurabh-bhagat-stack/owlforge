@@ -12,6 +12,7 @@ XSS = "xss"
 PATH = "path_traversal"
 OBJECT_ID = "access_control"
 SSRF = "ssrf_redirect"
+CSRF = "csrf"
 
 _ID = ("id", "productid", "userid", "orderid", "accountid", "docid", "itemid", "pid",
        "uid", "gid", "oid", "objectid", "invoiceid", "ticketid", "fileid")

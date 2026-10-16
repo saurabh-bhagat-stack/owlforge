@@ -13,7 +13,16 @@ from collections import defaultdict
 from sqlmodel import select
 
 from owlforge.engine.agent import run_single_agent
-from owlforge.engine.classify import OBJECT_ID, PATH, SQLI, SSRF, XSS, classify_param, endpoint_interesting
+from owlforge.engine.classify import (
+    CSRF,
+    OBJECT_ID,
+    PATH,
+    SQLI,
+    SSRF,
+    XSS,
+    classify_param,
+    endpoint_interesting,
+)
 from owlforge.engine.events import Emitter
 from owlforge.store.db import session
 from owlforge.store.models import SurfaceItem
@@ -25,6 +34,7 @@ _TITLE = {
     PATH: "path traversal / local file inclusion",
     OBJECT_ID: "broken access control / IDOR",
     SSRF: "SSRF / open redirect",
+    CSRF: "cross-site request forgery",
 }
 _HINT = {
     SQLI: "a lone single quote (') that makes the response error/500 and reverts to 200 when balanced ('')",
@@ -32,8 +42,10 @@ _HINT = {
     PATH: "payloads like ../../../../etc/passwd returning file contents (e.g. root:x:0:0)",
     OBJECT_ID: "accessing another object's id, or a forbidden/hidden endpoint, and receiving data you should not",
     SSRF: "a URL parameter causing a server-side fetch, or an attacker URL reflected in a redirect/Location",
+    CSRF: "a state-changing request still succeeds with the anti-CSRF token omitted/replaced, and no "
+          "SameSite cookie or Origin/Referer check blocks a cross-site submission",
 }
-_ORDER = [SQLI, XSS, PATH, OBJECT_ID, SSRF]
+_ORDER = [SQLI, XSS, PATH, OBJECT_ID, SSRF, CSRF]
 _MAX_TARGETS = 8  # per specialist — test the highest-interest first, don't dilute budget
 
 
@@ -80,6 +92,11 @@ def plan_tasks(inventory: list[dict]) -> dict[str, list[dict]]:
             if key not in seen:
                 seen.add(key)
                 tasks[OBJECT_ID].append({"url": it["url"], "method": it["method"], "param": None})
+        if it.get("method", "GET").upper() in ("POST", "PUT", "DELETE", "PATCH"):
+            key = (CSRF, it["method"], it["url"], None)
+            if key not in seen:
+                seen.add(key)
+                tasks[CSRF].append({"url": it["url"], "method": it["method"], "param": None})
     return dict(tasks)
 
 

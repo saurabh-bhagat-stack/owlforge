@@ -1,0 +1,17 @@
+name: csrf
+title: Cross-site request forgery (CSRF)
+body: |
+  Surface: state-changing requests (POST/PUT/DELETE/PATCH) — profile/email/password
+  change, add-to-cart, transfer, admin actions, posting content.
+  Handle rotation first: fetch the form page and read the CURRENT anti-CSRF token
+  (csrf_token, authenticity_token, __RequestVerificationToken, csrfmiddlewaretoken,
+  _csrf, xsrf-token) before submitting — tokens often rotate per request.
+  Test for the vuln:
+  - Baseline: perform the action WITH a valid token and session -> it succeeds.
+  - Omit the token (or send an empty/garbage one) with the same session -> if it STILL
+    succeeds, the token is not validated = CSRF.
+  - Replay another session's token, or a stale token -> should be rejected.
+  - Check defenses: is the session cookie SameSite=Lax/Strict? Is Origin/Referer
+    enforced? A state-changing action accepted cross-site with no token and no
+    SameSite/Origin check is exploitable.
+  Do NOT file if a valid, per-session token is required and SameSite/Origin is enforced.
