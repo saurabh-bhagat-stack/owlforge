@@ -49,6 +49,9 @@ COPY mitm /opt/owlforge/mitm-addons
 COPY entrypoint.sh /opt/owlforge/entrypoint.sh
 RUN chmod +x /opt/owlforge/entrypoint.sh && mkdir -p /workspace
 
+# bake nuclei templates (full set) so --nuclei scans are fast + reproducible
+RUN nuclei -update-templates -disable-update-check 2>/dev/null || echo "WARN: nuclei template fetch failed"
+
 COPY wordlists /opt/owlforge/wordlists
 EXPOSE 47130 6080
 ENTRYPOINT ["/opt/owlforge/entrypoint.sh"]

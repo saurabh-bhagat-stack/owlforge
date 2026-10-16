@@ -87,6 +87,7 @@ def run(
     recon_pages: int = typer.Option(25, "--recon-pages", help="Max pages to crawl during recon."),
     network_recon: bool = typer.Option(False, "--network-recon", help="Also run port/service discovery (nmap)."),
     browser_recon: bool = typer.Option(False, "--browser-recon", help="Headless-Chromium render (SPA recon)."),
+    nuclei: bool = typer.Option(False, "--nuclei", help="Run nuclei (full templates) as a signal source — slower."),
     orchestrate: bool = typer.Option(True, "--orchestrate/--single", help="Multi-agent default (--single = one agent)"),
     scope_in: list[str] = typer.Option(None, "--scope", help="Extra in-scope host or host/path glob (repeatable)."),  # noqa: B008
     scope_out: list[str] = typer.Option(None, "--out-of-scope", help="Out-of-scope host/path glob (repeatable; wins)."),  # noqa: B008
@@ -240,6 +241,13 @@ def run(
                 network_recon_enabled=network_recon, browser_recon_enabled=browser_recon,
                 scope=scope, log=lambda m: console.print(rf"[dim]\[recon] {m}[/]"))
             console.print(rf"[dim]\[auth] {auth_summary}[/]")
+            if nuclei:
+                from owlforge.engine.recon import nuclei_scan
+                try:
+                    nuclei_scan(aid, target, sandbox_client,
+                                log=lambda m: console.print(rf"[dim]\[nuclei] {m}[/]"))
+                except Exception as e:
+                    console.print(f"[yellow]nuclei failed: {e}[/]")
             if surface_text:
                 console.print(f"[dim]\\[recon] surface inventory:\n{surface_text[:700]}[/]")
         except Exception as e:

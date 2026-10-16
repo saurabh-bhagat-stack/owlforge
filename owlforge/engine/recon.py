@@ -711,3 +711,76 @@ def browser_recon(
         rendered += 1
     log(f"browser recon: rendered {rendered} page(s), {len(out)} item(s)")
     return out
+
+
+def _parse_nuclei_jsonl(text: str) -> list[dict]:
+    """Parse nuclei -jsonl output into {title, severity, url, template, evidence}."""
+    import json as _json
+
+    out = []
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line.startswith("{"):
+            continue
+        try:
+            d = _json.loads(line)
+        except Exception:
+            continue
+        info = d.get("info") or {}
+        out.append({
+            "template": d.get("template-id") or d.get("templateID") or "",
+            "title": info.get("name") or d.get("template-id") or "nuclei finding",
+            "severity": (info.get("severity") or "info").lower(),
+            "url": d.get("matched-at") or d.get("host") or d.get("matched") or "",
+            "evidence": (d.get("matched-at") or "") + " " + str(d.get("extracted-results") or ""),
+        })
+    return out
+
+
+def nuclei_scan(assessment_id: str, target: str, sandbox_client,
+                severities: str = "low,medium,high,critical",
+                timeout_ms: int = 420_000, log: Callable[[str], None] = lambda m: None) -> int:
+    """Run nuclei (full templates) in the sandbox as a signal source; file each hit as a
+    candidate finding for the specialists to confirm/deepen. Opt-in (slower)."""
+    if sandbox_client is None:
+        log("nuclei skipped (no sandbox)")
+        return 0
+    sev = f"-severity {severities}" if severities else ""
+    cmd = (f"nuclei -u {target} -jsonl -silent -disable-update-check "
+           f"-timeout 10 -rate-limit 60 {sev} 2>/dev/null")
+    try:
+        r = sandbox_client.exec(cmd, timeout_ms=timeout_ms)
+        hits = _parse_nuclei_jsonl(r.stdout or "")
+    except Exception as e:
+        log(f"nuclei error: {e}")
+        return 0
+
+    import secrets as _secrets
+
+    from owlforge.store.db import session
+    from owlforge.store.models import Finding
+
+    filed = 0
+    seen: set[tuple] = set()
+    with session() as s:
+        for h in hits:
+            key = (h["template"], h["url"])
+            if key in seen:
+                continue
+            seen.add(key)
+            s.add(Finding(
+                id=f"find_{_secrets.token_hex(5)}", assessment_id=assessment_id,
+                title=f"nuclei: {h['title']}", severity=h["severity"] if h["severity"] != "info" else "low",
+                endpoint=h["url"], method="GET",
+                technical_analysis=f"nuclei template '{h['template']}' matched at {h['url']}.",
+                proof_of_concept=h["evidence"].strip()[:300], evidence=h["evidence"].strip()[:500],
+                impact="See the nuclei template description for this class of issue.",
+                remediation="Triage the matched template; confirm and remediate per its guidance.",
+                status="candidate", confidence="medium",
+                validation_note=f"nuclei signal ({h['template']})"))
+            filed += 1
+        if filed:
+            s.commit()
+    log(f"nuclei: {len(hits)} match(es), {filed} finding(s) filed")
+    return filed
+

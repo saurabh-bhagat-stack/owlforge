@@ -207,3 +207,16 @@ def test_js_endpoint_extraction_covers_fetch_axios_xhr_template_absolute():
     users = next(e for e in eps if e["url"].endswith("/api/users"))
     assert "role" in users["params"]
     assert "role" in loose and "q" in loose
+
+
+def test_parse_nuclei_jsonl():
+    from owlforge.engine.recon import _parse_nuclei_jsonl
+
+    out = _parse_nuclei_jsonl(
+        '{"template-id":"tech-detect","info":{"name":"Nginx","severity":"info"},"matched-at":"https://t/"}\n'
+        'garbage line\n'
+        '{"template-id":"CVE-2021-9","info":{"name":"RCE thing","severity":"critical"},"matched-at":"https://t/x"}'
+    )
+    assert len(out) == 2
+    assert out[0]["template"] == "tech-detect" and out[0]["severity"] == "info"
+    assert out[1]["severity"] == "critical" and out[1]["url"] == "https://t/x"
