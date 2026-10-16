@@ -38,20 +38,19 @@ RUN set -u; ARCH="$(dpkg --print-architecture)"; cd /tmp; \
 RUN python3 -m venv /opt/owlforge/mitm-venv \
     && /opt/owlforge/mitm-venv/bin/pip install "mitmproxy>=11,<13"
 
-# owlforge-agentd (its own venv).
+# owlforge-agentd venv + Chromium + nuclei templates FIRST (heavy, rarely change),
+# then the agentd code LAST so editing it rebuilds in seconds (no chromium re-download).
 WORKDIR /opt/owlforge
 COPY agentd/requirements.txt /opt/owlforge/agentd/requirements.txt
 RUN python3 -m venv /opt/owlforge/venv \
     && /opt/owlforge/venv/bin/pip install -r /opt/owlforge/agentd/requirements.txt
-COPY agentd /opt/owlforge/agentd
 RUN /opt/owlforge/venv/bin/playwright install --with-deps chromium
-COPY mitm /opt/owlforge/mitm-addons
-COPY entrypoint.sh /opt/owlforge/entrypoint.sh
-RUN chmod +x /opt/owlforge/entrypoint.sh && mkdir -p /workspace
-
 # bake nuclei templates (full set) so --nuclei scans are fast + reproducible
 RUN nuclei -update-templates -disable-update-check 2>/dev/null || echo "WARN: nuclei template fetch failed"
-
+COPY mitm /opt/owlforge/mitm-addons
 COPY wordlists /opt/owlforge/wordlists
+COPY entrypoint.sh /opt/owlforge/entrypoint.sh
+RUN chmod +x /opt/owlforge/entrypoint.sh && mkdir -p /workspace
+COPY agentd /opt/owlforge/agentd
 EXPOSE 47130 6080
 ENTRYPOINT ["/opt/owlforge/entrypoint.sh"]
