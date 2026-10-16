@@ -544,6 +544,12 @@ def run_recon(
     if not session_headers and disc_headers:
         session_headers = disc_headers
         auth_summary = f"authenticated (auto-escalated: {prov})"
+    if not session_headers:
+        from owlforge.engine.credpage import establish_from_login_page
+        _lh, _lp = establish_from_login_page(target, sandbox_client, _reqfn, log=log)
+        if _lh:
+            session_headers = _lh
+            auth_summary = f"authenticated (login-page creds: {_lp})"
 
     inv = unauth_inv
     # pass 2: authenticated (only if a session was resolved)
