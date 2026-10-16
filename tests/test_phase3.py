@@ -334,17 +334,18 @@ def test_dedupe_collapses_same_class_endpoint_keeps_best(isolated):
     from owlforge.engine.validate import dedupe_findings
     from owlforge.store.models import Finding
 
+    def seed(fid, title, severity, status, params):
+        with isolated.session() as s:
+            s.add(Finding(id=fid, assessment_id="asmt_x", title=title, severity=severity,
+                          status=status, repro_url="https://t/catalog", repro_method="GET",
+                          repro_params=params))
+            s.commit()
+
     # same class+endpoint+params: a validated and a candidate -> candidate becomes duplicate
-    _mk(isolated, id="d1", title="SQL Injection in category", severity="high",
-        status="validated", repro_url="https://t/catalog", repro_method="GET",
-        repro_params={"category": "'"})
-    _mk(isolated, id="d2", title="SQLi via category param", severity="medium",
-        status="candidate", repro_url="https://t/catalog", repro_method="GET",
-        repro_params={"category": "'"})
+    seed("d1", "SQL Injection in category", "high", "validated", {"category": "'"})
+    seed("d2", "SQLi via category param", "medium", "candidate", {"category": "'"})
     # a different class on the same endpoint must NOT be merged
-    _mk(isolated, id="d3", title="Reflected XSS in category", severity="medium",
-        status="candidate", repro_url="https://t/catalog", repro_method="GET",
-        repro_params={"category": "<x>"})
+    seed("d3", "Reflected XSS in category", "medium", "candidate", {"category": "<x>"})
 
     collapsed = dedupe_findings("asmt_x")
     assert collapsed == 1
