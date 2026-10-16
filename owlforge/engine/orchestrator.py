@@ -24,6 +24,7 @@ from owlforge.engine.classify import (
     endpoint_interesting,
 )
 from owlforge.engine.events import Emitter
+from owlforge.engine.preprobe import GATEABLE, filter_targets
 from owlforge.store.db import session
 from owlforge.store.models import SurfaceItem
 from owlforge.tools.builtin import build_registry
@@ -140,8 +141,16 @@ async def run_orchestrated(
             targets = [t for t in targets if scope.in_scope(t["url"])]
             if not targets:
                 continue
-        targets = sorted(targets, key=lambda t: _priority(cls, t), reverse=True)[:_MAX_TARGETS]
+        targets = sorted(targets, key=lambda t: _priority(cls, t), reverse=True)
+        # deterministic pre-probe: only signal-positive targets earn a specialist
+        probed, probe_notes = filter_targets(cls, targets[:16], sandbox, session_headers)
+        if cls in GATEABLE and not probed:
+            emit("status", f"[specialist:{cls}] skipped (pre-probe found no signal)")
+            continue
+        targets = (probed or targets)[:_MAX_TARGETS]
         emit("status", f"[specialist:{cls}] testing {len(targets)} target(s) (highest-interest first)")
+        hint = ("\n\nPre-probe ALREADY observed these signals — confirm and exploit them first:\n- "
+                + "\n- ".join(probe_notes[:8])) if probe_notes else ""
         instr = (
             f"You are a {_TITLE[cls]} specialist. Test ONLY for {_TITLE[cls]} on the targets below — "
             f"nothing else. Signal of success: {_HINT[cls]}. Use http_request (put RAW payloads in "
@@ -149,7 +158,7 @@ async def run_orchestrated(
             "call create_finding with severity, a proof_of_concept, and a STRUCTURED repro: "
             "repro_url (the endpoint), repro_params with the EXACT raw payload value that triggered it, "
             "and success_signal (text present ONLY when vulnerable, e.g. 500). Then call finish. Do not "
-            "file what you cannot reproduce."
+            "file what you cannot reproduce." + hint
         )
         try:
             await run_single_agent(
