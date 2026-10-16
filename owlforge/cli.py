@@ -91,6 +91,8 @@ def run(
     scope_in: list[str] = typer.Option(None, "--scope", help="Extra in-scope host or host/path glob (repeatable)."),  # noqa: B008
     scope_out: list[str] = typer.Option(None, "--out-of-scope", help="Out-of-scope host/path glob (repeatable; wins)."),  # noqa: B008
     only: str = typer.Option(None, "--only", help="Restrict to vuln classes, comma-separated (e.g. xss,sqli)."),
+    identities: str = typer.Option(
+        None, "--identities", help="YAML file of role-labelled identities (multi-session / privesc)."),
 ) -> None:
     """Start an assessment and run the single-agent loop, with the sandbox if available."""
     import asyncio
@@ -161,6 +163,36 @@ def run(
         user_auth = AuthContext(mode="session", headers=_extra)
     else:
         user_auth = AuthContext(mode="unauth")
+
+    if identities:
+        from owlforge.engine.identities import establish_all, load_identities, primary_identity
+
+        def _estab_reqfn(method, url, headers=None, params=None, body=None):
+            if sandbox_client is not None:
+                try:
+                    return sandbox_client.http_request(method, url, headers=headers, params=params, body=body)
+                except Exception as e:
+                    return {"error": str(e)}
+            import httpx
+            try:
+                r = httpx.request(method, url, headers=headers, params=params, content=body,
+                                  follow_redirects=False, timeout=20.0)
+                return {"status": r.status_code, "headers": dict(r.headers), "body": r.text}
+            except Exception as e:
+                return {"error": str(e)}
+
+        try:
+            _idents = establish_all(load_identities(identities), _estab_reqfn,
+                                    log=lambda m: console.print(rf"[dim]\[identities] {m}[/]"))
+            _prim = primary_identity(_idents)
+            _ok = sum(1 for i in _idents if i.session_headers)
+            _sso = [i.label for i in _idents if i.needs_sso]
+            console.print(f"[dim]identities: {len(_idents)} loaded, {_ok} with a session"
+                          + (f"; SSO pending: {', '.join(_sso)}" if _sso else "") + "[/]")
+            if _prim and _prim.session_headers:
+                user_auth = AuthContext(mode="session", headers=_prim.session_headers)
+        except Exception as e:
+            console.print(f"[yellow]identities load failed: {e}[/]")
 
     auth_intent = ("operator login" if user_auth.mode == "login"
                    else "operator session" if user_auth.mode == "session"
