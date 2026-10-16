@@ -492,3 +492,70 @@ async def ws_probe(req: WsProbeRequest) -> dict:
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
     return {"connected": err == "", "error": err, "responses": responses[:10]}
+
+
+
+class SmuggleRequest(BaseModel):
+    url: str
+    timeout_s: float = 10.0
+
+
+@app.post("/smuggle_probe", dependencies=[Depends(auth)])
+async def smuggle_probe(req: SmuggleRequest) -> dict:
+    """Best-effort, time-based HTTP request-smuggling detection (CL.TE / TE.CL). Sends a
+    benign baseline plus ambiguous CL+TE requests over a raw socket and compares read
+    timing — a large delay on an ambiguous request suggests a front/back-end desync.
+    Detection only (no malicious smuggled request); confirm manually."""
+    import socket
+    import ssl
+    import time
+    from urllib.parse import urlsplit
+
+    sp = urlsplit(req.url)
+    host = sp.hostname or ""
+    if not host:
+        return {"error": "bad url"}
+    tls = sp.scheme == "https"
+    port = sp.port or (443 if tls else 80)
+
+    def _send(raw: str) -> float:
+        try:
+            sock = socket.create_connection((host, port), timeout=8)
+            if tls:
+                sock = ssl.create_default_context().wrap_socket(sock, server_hostname=host)
+        except Exception:
+            return -1.0
+        try:
+            sock.sendall(raw.encode())
+            sock.settimeout(req.timeout_s)
+            start = time.time()
+            try:
+                while True:
+                    if not sock.recv(4096):
+                        break
+            except Exception:
+                pass
+            return time.time() - start
+        finally:
+            try:
+                sock.close()
+            except Exception:
+                pass
+
+    base = f"GET / HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\n\r\n"
+    clte = (f"POST / HTTP/1.1\r\nHost: {host}\r\nContent-Length: 4\r\n"
+            f"Transfer-Encoding: chunked\r\n\r\n1\r\nA\r\nX\r\n")
+    tecl = (f"POST / HTTP/1.1\r\nHost: {host}\r\nContent-Length: 6\r\n"
+            f"Transfer-Encoding: chunked\r\n\r\n0\r\n\r\nX\r\n")
+    t_base = _send(base)
+    t_clte = _send(clte)
+    t_tecl = _send(tecl)
+    if t_base < 0:
+        return {"error": "connect failed", "baseline": t_base}
+    # a probe that hangs far longer than baseline (near the read timeout) = potential desync
+    thresh = max(t_base * 3 + 1.0, 4.0)
+    potential = (t_clte >= thresh and t_clte >= req.timeout_s * 0.8) or \
+                (t_tecl >= thresh and t_tecl >= req.timeout_s * 0.8)
+    kind = "CL.TE" if t_clte >= thresh else ("TE.CL" if t_tecl >= thresh else "")
+    return {"potential": potential, "kind": kind,
+            "baseline_s": round(t_base, 2), "clte_s": round(t_clte, 2), "tecl_s": round(t_tecl, 2)}

@@ -85,6 +85,13 @@ class SandboxClient:
         r.raise_for_status()
         return r.json()
 
+    def smuggle_probe(self, url: str, *, timeout_s: float = 10.0) -> dict:
+        """Time-based request-smuggling (CL.TE/TE.CL) detection."""
+        r = httpx.post(f"{self.base_url}/smuggle_probe", headers=self._headers(),
+                       json={"url": url, "timeout_s": timeout_s}, timeout=self.timeout + timeout_s * 4)
+        r.raise_for_status()
+        return r.json()
+
     def ws_probe(self, url: str, *, messages: list[str] | None = None,
                  headers: dict | None = None, timeout_ms: int = 8000) -> dict:
         """Connect to a WebSocket, send messages, return responses."""
