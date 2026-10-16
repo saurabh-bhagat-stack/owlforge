@@ -183,3 +183,27 @@ def test_discover_credentials_empty_when_nothing_exposed():
 
     headers, prov = discover_credentials("https://t/", [], None, reqfn)
     assert headers == {} and prov == ""
+
+
+def test_js_endpoint_extraction_covers_fetch_axios_xhr_template_absolute():
+    from owlforge.engine.recon import extract_js_endpoints
+
+    js = (
+        'fetch("/api/users?role=admin").then(r=>r.json());'
+        'axios.post("/api/orders", body);'
+        'var x=new XMLHttpRequest(); x.open("GET","/rest/products/list");'
+        'const u = `${base}/api/account/${id}/profile`;'
+        '$.get("https://api.example.com/v1/search?q="+t);'
+        'img.src="/static/logo.png";'
+    )
+    eps, loose = extract_js_endpoints("https://ui.example.com", js)
+    urls = {(e["method"], e["url"]) for e in eps}
+    assert ("GET", "https://ui.example.com/api/users") in urls
+    assert ("POST", "https://ui.example.com/api/orders") in urls
+    assert ("GET", "https://ui.example.com/rest/products/list") in urls
+    assert ("GET", "https://ui.example.com/api/account") in urls          # from template literal
+    assert ("GET", "https://api.example.com/v1/search") in urls           # cross-origin API host
+    assert not any(e["url"].endswith("/static/logo.png") for e in eps)    # assets skipped
+    users = next(e for e in eps if e["url"].endswith("/api/users"))
+    assert "role" in users["params"]
+    assert "role" in loose and "q" in loose

@@ -168,27 +168,72 @@ def extract_script_srcs(base_url: str, html: str) -> list[str]:
     return out
 
 
+_ASSET_EXT = (".js", ".css", ".png", ".jpg", ".jpeg", ".svg", ".woff", ".woff2", ".map",
+              ".ico", ".gif", ".webp", ".ttf", ".mp4", ".json")
+# path prefixes that strongly indicate a real (often API) route worth testing
+_API_HINT = (r"api", r"rest", r"graphql", r"graphiql", r"v\d+", r"internal", r"admin",
+             r"auth", r"oauth2?", r"login", r"logout", r"users?", r"accounts?", r"orders?",
+             r"cart", r"checkout", r"payments?", r"search", r"upload", r"download", r"session")
+_API_PREFIX_RE = "(?:" + "|".join(_API_HINT) + ")"
+
+
+def _clean_js_path(p: str) -> str:
+    """Normalise a path captured from JS: drop query + template placeholders + trailing /."""
+    p = p.split("${", 1)[0].split("?", 1)[0].split("#", 1)[0].rstrip("/")
+    return p
+
+
 def extract_js_endpoints(origin: str, js: str) -> tuple[list[dict], set[str]]:
-    """From a JS bundle: precise path?query literals (endpoint+params), bare path
-    literals (endpoints), and loose param names seen. Regex-based (noisy by nature)."""
+    """From a JS bundle, recover API routes the app actually calls: path?query literals,
+    fetch/axios/XHR/jQuery call URLs (incl. template literals and absolute API hosts),
+    and API-prefixed path literals. Regex-based (best-effort), plus loose param names."""
     import re
+
+    js = js or ""
     items: dict[tuple, set] = {}
-    # 1) path?query literals -> precise endpoint + params
-    for m in re.finditer(r'["\'](/[A-Za-z0-9_\-./]+)\?([A-Za-z0-9_\-=&%${}.]+)["\']', js or ""):
-        path, qs = m.group(1), m.group(2)
-        keys = sorted({k for k in re.findall(r'([A-Za-z_][A-Za-z0-9_]{0,30})=', qs)})
-        items.setdefault((origin + path, "GET"), set()).update(keys)
-    # 2) bare path literals -> endpoints (skip asset/static)
-    _skip = (".js", ".css", ".png", ".jpg", ".jpeg", ".svg", ".woff", ".woff2", ".map",
-             ".ico", ".gif", ".webp", ".ttf")
-    for m in re.finditer(r'["\'](/[A-Za-z0-9_][A-Za-z0-9_\-./]{1,70})["\']', js or ""):
-        path = m.group(1)
-        if path.lower().endswith(_skip) or "//" in path:
-            continue
-        items.setdefault((origin + path, "GET"), set())
-    # 3) loose param names anywhere (?x= or &x=)
-    loose = {m.group(1) for m in re.finditer(r'[?&]([A-Za-z_][A-Za-z0-9_]{0,30})=', js or "")}
-    out = [{"url": url, "method": method, "params": sorted(ps), "source": "js"} for (url, method), ps in items.items()]
+
+    def add(url: str, method: str = "GET", params=()) -> None:
+        items.setdefault((url, method), set()).update(params)
+
+    def add_raw(raw: str, method: str = "GET", params=()) -> None:
+        raw = raw.strip()
+        if raw.startswith(("http://", "https://")):
+            pr = urlparse(raw)
+            if not pr.netloc:
+                return
+            path = _clean_js_path(pr.path)
+            if path.lower().endswith(_ASSET_EXT):
+                return
+            add(f"{pr.scheme}://{pr.netloc}{path}", method, params)
+        elif raw.startswith("/") and not raw.startswith("//"):
+            path = _clean_js_path(raw)
+            if len(path) > 1 and not path.lower().endswith(_ASSET_EXT):
+                add(origin + path, method, params)
+
+    # 1) path?query literals -> precise endpoint + params (quotes incl backtick)
+    for m in re.finditer(r"""["'`](/[A-Za-z0-9_\-./]+)\?([A-Za-z0-9_\-=&%${}.]+)["'`]""", js):
+        keys = sorted({k for k in re.findall(r"([A-Za-z_][A-Za-z0-9_]{0,30})=", m.group(2))})
+        add_raw(m.group(1), "GET", keys)
+
+    # 2) XHR: .open("METHOD","URL")
+    for m in re.finditer(r"""\.open\s*\(\s*["'`](GET|POST|PUT|DELETE|PATCH)["'`]\s*,\s*["'`]([^"'`]+)["'`]""", js, re.I):  # noqa: E501
+        add_raw(m.group(2), m.group(1).upper())
+
+    # 3) fetch(...) / axios.method(...) / $.get|post|ajax(...) call URLs
+    for m in re.finditer(r"""(?:fetch|axios(?:\.(get|post|put|delete|patch))?|\$\.(get|post|ajax))\s*\(\s*\{?[^)]*?["'`]([^"'`]+)["'`]""", js, re.I):  # noqa: E501
+        verb = (m.group(1) or m.group(2) or "GET").upper()
+        if verb == "AJAX":
+            verb = "GET"
+        add_raw(m.group(3), verb)
+
+    # 4) API-prefixed paths anywhere (incl. inside template strings / absolute URLs)
+    for m in re.finditer(r"""((?:https?://[A-Za-z0-9.\-]+(?::\d+)?)?/""" + _API_PREFIX_RE + r"""[A-Za-z0-9_\-./${}]*)""", js, re.I):  # noqa: E501
+        add_raw(m.group(1))
+
+    # 5) loose param names anywhere (?x= or &x=)
+    loose = {m.group(1) for m in re.finditer(r"[?&]([A-Za-z_][A-Za-z0-9_]{0,30})=", js)}
+    out = [{"url": url, "method": method, "params": sorted(ps), "source": "js"}
+           for (url, method), ps in items.items()]
     return out, loose
 
 
