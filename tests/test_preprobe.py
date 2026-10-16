@@ -62,7 +62,8 @@ def test_probe_ssti_and_rce():
     class RCESB:
         def http_request(self, method, url, *, params=None, headers=None, body=None, timeout_ms=60_000):
             v = (params or {}).get("host", "")
-            body = "uid=33(www-data) gid=33(www-data)" if "id" in v and (";" in v or "|" in v or "$" in v or "`" in v) else "pong"
+            hit = "id" in v and any(ch in v for ch in ";|$`")
+            body = "uid=33(www-data) gid=33(www-data)" if hit else "pong"
             return {"status": 200, "body": body}
     assert probe(RCE, {"url": "https://t/ping", "param": "host"}, RCESB())[0] is True
 

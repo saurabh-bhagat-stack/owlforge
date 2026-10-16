@@ -71,7 +71,7 @@ def test_render_inventory_annotates_classes_and_interest_and_orders():
     ]
     out = render_inventory(inv)
     lines = out.splitlines()
-    assert "classes: sqli, xss" in out
+    assert "classes: sqli, ssti, xss" in out
     assert "!HIGH" in out
     assert "/catalog" in lines[0]
     assert "/admin" in lines[1]
