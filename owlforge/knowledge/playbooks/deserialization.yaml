@@ -1,0 +1,10 @@
+name: deserialization
+title: Insecure deserialization
+priority: 6
+body: |
+  Signal: a serialized object served to the client and sent back — java (base64 rO0AB /
+  bytes ac ed 00 05), php (O:n:"Class"), .NET __VIEWSTATE, python pickle (\x80\x04, gASV).
+  If it is deserialized server-side without a signature/allowlist, a crafted gadget chain
+  can change behaviour or run code. Confirm cautiously and read-only (e.g. a detectable
+  property change or an OOB ping); NEVER run a destructive gadget. Flag the blob + where
+  it round-trips even if full exploitation needs manual follow-up.

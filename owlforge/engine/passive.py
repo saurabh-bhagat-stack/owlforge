@@ -28,6 +28,8 @@ _STACK_MARKERS = ("traceback (most recent call last)", "java.lang.", "system.web
                   "ora-0", "sqlstate", "stack trace:", "nullpointerexception",
                   "org.springframework", "werkzeug debugger", "fatal error:")
 _SESSION_COOKIE = ("session", "sess", "sid", "auth", "token", "jwt", "phpsessid", "jsessionid")
+# serialized-object markers: java(b64 rO0AB / ac ed 00 05), php (O:n:"), .NET ViewState, python pickle
+_SERIALIZED = ("rO0AB", "__VIEWSTATE", "O:8:\"", "O:4:\"", "a:1:{", "gASV", "\\x80\\x04")
 
 
 def scan_response(url: str, resp: dict) -> list[PassiveFinding]:
@@ -91,6 +93,15 @@ def scan_response(url: str, resp: dict) -> list[PassiveFinding]:
     if "index of /" in body.lower() and "<title>index of" in body.lower():
         add("Directory listing enabled", "medium", "'Index of /' autoindex page",
             "Server autoindex exposes files that are not meant to be browsable.")
+
+    # insecure deserialization: serialized blobs served in cookies/body
+    blob_src = " ".join(set_cookies) + " " + body[:4000]
+    for mk in _SERIALIZED:
+        if mk in blob_src:
+            add("Serialized object exposed (possible insecure deserialization)", "medium",
+                mk, "A serialized object is present in a cookie/response; if it is deserialized "
+                "server-side without integrity checks it may enable gadget-chain attacks.")
+            break
 
     # verbose errors / stack traces
     blow = body.lower()

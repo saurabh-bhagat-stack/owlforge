@@ -1,0 +1,9 @@
+name: nosql
+title: NoSQL injection
+priority: 4
+body: |
+  Surface: search/filter/login/username/query params on apps backed by Mongo/Couch/etc.
+  Operator injection in query strings: username[$ne]=x, username[$gt]=, or JSON body
+  {"username": {"$ne": null}} to bypass auth or dump data. In string contexts try
+  ' || '1'=='1 and a'||'1'=='1 . Confirm by an auth bypass or a query returning rows it
+  should not. File with the exact operator/payload and the behaviour change.

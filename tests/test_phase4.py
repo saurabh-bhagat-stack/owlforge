@@ -220,3 +220,20 @@ def test_parse_nuclei_jsonl():
     assert len(out) == 2
     assert out[0]["template"] == "tech-detect" and out[0]["severity"] == "info"
     assert out[1]["severity"] == "critical" and out[1]["url"] == "https://t/x"
+
+
+def test_m6c_nosql_classify_and_xxe_dispatch():
+    from owlforge.engine.classify import NOSQL, XXE, classify_param
+    from owlforge.engine.orchestrator import plan_tasks
+
+    assert NOSQL in classify_param("username")
+    assert NOSQL in classify_param("search")
+    tasks = plan_tasks([
+        {"url": "https://t/soap/service", "method": "POST", "params": ["body"]},
+        {"url": "https://t/api/users", "method": "GET", "params": [], "source": "api-spec"},
+        {"url": "https://t/catalog", "method": "GET", "params": ["q"]},
+    ])
+    xxe_urls = {x["url"] for x in tasks.get(XXE, [])}
+    assert "https://t/soap/service" in xxe_urls           # soap in url
+    assert "https://t/api/users" in xxe_urls              # api-spec source
+    assert "https://t/catalog" not in xxe_urls            # plain GET page

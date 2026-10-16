@@ -1,0 +1,10 @@
+name: xxe
+title: XML external entity (XXE)
+priority: 4
+body: |
+  Surface: endpoints that accept XML/SOAP (Content-Type application/xml or text/xml),
+  file uploads that parse XML (SVG/DOCX), API/SOAP/WSDL routes. Send a doctype with an
+  external entity and look for the file contents in the response (classic) or a callback
+  to your host (blind/OOB):
+    <?xml version="1.0"?><!DOCTYPE r [<!ENTITY x SYSTEM "file:///etc/passwd">]><r>&x;</r>
+  Proof = /etc/passwd (root:x:0:0) reflected, or an OOB request you observe. Read-only.

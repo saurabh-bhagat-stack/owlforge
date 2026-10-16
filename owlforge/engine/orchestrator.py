@@ -16,6 +16,8 @@ from owlforge.engine.agent import run_single_agent
 from owlforge.engine.classify import (
     CRLF,
     CSRF,
+    DESER,
+    NOSQL,
     OBJECT_ID,
     OPEN_REDIRECT,
     PATH,
@@ -24,6 +26,7 @@ from owlforge.engine.classify import (
     SSRF,
     SSTI,
     XSS,
+    XXE,
     classify_param,
     endpoint_interesting,
 )
@@ -44,6 +47,9 @@ _TITLE = {
     RCE: "OS command injection / RCE",
     OPEN_REDIRECT: "open redirect",
     CRLF: "CRLF / HTTP response-header injection",
+    NOSQL: "NoSQL injection",
+    XXE: "XML external entity (XXE) injection",
+    DESER: "insecure deserialization",
 }
 _HINT = {
     SQLI: "a lone single quote (') that makes the response error/500 and reverts to 200 when balanced ('')",
@@ -57,8 +63,11 @@ _HINT = {
     RCE: "an injected OS command runs (e.g. ;id -> uid=.../gid=...); keep proof read-only (id/hostname)",
     OPEN_REDIRECT: "an attacker URL in the parameter becomes the 3xx Location (off-site redirect)",
     CRLF: "a newline in the parameter injects a new response header (e.g. an extra Set-Cookie)",
+    NOSQL: "operator injection (e.g. [$ne]/[$gt] or \'||1==1) changes auth/query behaviour",
+    XXE: "an external entity is resolved (file read / SSRF via the XML parser)",
+    DESER: "a crafted serialized object is deserialized (gadget -> code/behaviour change)",
 }
-_ORDER = [RCE, SSTI, SQLI, XSS, PATH, OBJECT_ID, SSRF, OPEN_REDIRECT, CRLF, CSRF]
+_ORDER = [RCE, SSTI, SQLI, NOSQL, XSS, PATH, XXE, DESER, OBJECT_ID, SSRF, OPEN_REDIRECT, CRLF, CSRF]
 _MAX_TARGETS = 8  # per specialist — test the highest-interest first, don't dilute budget
 
 
@@ -110,6 +119,12 @@ def plan_tasks(inventory: list[dict]) -> dict[str, list[dict]]:
             if key not in seen:
                 seen.add(key)
                 tasks[CSRF].append({"url": it["url"], "method": it["method"], "param": None})
+        u = it["url"].lower()
+        if it.get("source") in ("api-spec", "graphql") or any(x in u for x in ("xml", "soap", "wsdl")):
+            key = (XXE, it["method"], it["url"], None)
+            if key not in seen:
+                seen.add(key)
+                tasks[XXE].append({"url": it["url"], "method": it["method"], "param": None})
     return dict(tasks)
 
 

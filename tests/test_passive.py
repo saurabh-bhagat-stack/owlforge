@@ -75,3 +75,9 @@ def test_host_header_injection_probe():
         return {"headers": {"Location": f"https://{h}/reset?token=abc"}, "body": ""}
     pf = host_header_injection("https://t/", reqfn)
     assert pf and pf.severity == "medium" and "Host-header" in pf.title
+
+
+def test_deserialization_blob_detected():
+    from owlforge.engine.passive import scan_response
+    titles = {f.title for f in scan_response("https://t/", {"headers": {"Set-Cookie": "state=rO0ABXNy"}, "body": ""})}
+    assert any("deserialization" in x.lower() for x in titles)

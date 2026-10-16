@@ -17,11 +17,15 @@ SSTI = "ssti"
 RCE = "rce"
 OPEN_REDIRECT = "open_redirect"
 CRLF = "crlf"
+NOSQL = "nosql"
+XXE = "xxe"
+DESER = "deserialization"
 
 _ID = ("id", "productid", "userid", "orderid", "accountid", "docid", "itemid", "pid",
        "uid", "gid", "oid", "objectid", "invoiceid", "ticketid", "fileid")
 _URL = ("url", "uri", "redirect", "redir", "next", "return", "returnurl", "callback",
         "dest", "destination", "continue", "goto", "feed", "site")
+_NOSQL = ("search", "filter", "query", "username", "user", "login", "email", "q", "where")
 _CMD = ("cmd", "command", "exec", "run", "ping", "shell", "code", "process",
         "system", "func", "query", "host", "ip", "dns", "lookup")
 _PATH = ("file", "filename", "path", "page", "template", "include", "download",
@@ -42,6 +46,8 @@ def classify_param(name: str) -> set[str]:
         tags.add(PATH)
     if any(k in n for k in _CMD):
         tags.add(RCE)
+    if any(k == n or n.endswith(k) for k in _NOSQL):
+        tags.add(NOSQL)
     return tags
 
 
