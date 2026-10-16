@@ -17,7 +17,7 @@ from owlforge.engine.csrf import _is_token_name, extract_token
 
 RequestFn = Callable[..., dict]
 
-# credential hints shown as "<b>Username</b> carlos", "username: carlos", var username='carlos'
+# credential hints shown as "<b>Username</b> <name>", "username: <name>", var username='<name>'
 _USER_RE = re.compile(
     r"(?:<b>\s*user(?:name)?\s*</b>\s*|user(?:name)?[\"']?\s*[:=]\s*[\"']?)([A-Za-z0-9._@-]{2,40})", re.I)
 _PASS_RE = re.compile(

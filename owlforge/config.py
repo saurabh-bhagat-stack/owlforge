@@ -41,7 +41,7 @@ class RunnerConfig(BaseModel):
 
 
 class TestingConfig(BaseModel):
-    default_target: str = "https://ginandjuice.shop/"
+    default_target: str = ""  # operator supplies the target with --target
 
 
 class Config(BaseModel):
@@ -98,7 +98,7 @@ max_budget_usd = 0.0
 reasoning_effort = "medium"
 
 [testing]
-default_target = "https://ginandjuice.shop/"
+default_target = ""  # set your authorized target, or pass --target
 """
 
 

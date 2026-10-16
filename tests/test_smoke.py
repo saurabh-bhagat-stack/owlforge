@@ -23,7 +23,7 @@ def test_default_config_loads():
 
     cfg = Config()
     assert cfg.llm.base_url.startswith("http")
-    assert cfg.testing.default_target == "https://ginandjuice.shop/"
+    assert cfg.testing.default_target == ""  # generic: operator supplies --target
 
 
 def test_init_and_run_use_isolated_home(tmp_path, monkeypatch):
