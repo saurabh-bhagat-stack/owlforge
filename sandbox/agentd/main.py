@@ -279,6 +279,13 @@ _NOVNC_PORT = int(os.environ.get("OWLFORGE_NOVNC_PORT", "6080"))
 _DEVNULL = subprocess.DEVNULL
 
 
+def _pkill(name: str) -> None:
+    try:
+        subprocess.run(["pkill", "-f", name], stdout=_DEVNULL, stderr=_DEVNULL)
+    except Exception:
+        pass
+
+
 class SsoStartRequest(BaseModel):
     url: str
     headers: dict[str, str] | None = None
@@ -301,22 +308,21 @@ async def sso_start(req: SsoStartRequest) -> dict:
     display = ":99"
     env = dict(os.environ)
     env["DISPLAY"] = display
-    # tear down any previous X stack, then bring up Xvfb -> x11vnc -> websockify(noVNC)
-    for name in ("websockify", "x11vnc", "Xvfb"):
-        subprocess.run(["pkill", "-f", name], stdout=_DEVNULL, stderr=_DEVNULL)
-    await asyncio.sleep(0.3)
-    procs = []
-    procs.append(subprocess.Popen(["Xvfb", display, "-screen", "0", "1360x900x24"],
-                                  stdout=_DEVNULL, stderr=_DEVNULL))
-    await asyncio.sleep(1.0)
-    subprocess.Popen(["x11vnc", "-display", display, "-nopw", "-forever", "-shared",
-                      "-rfbport", "5900", "-quiet"], env=env, stdout=_DEVNULL, stderr=_DEVNULL)
-    procs.append(subprocess.Popen(["websockify", "--web=/usr/share/novnc",
-                                   str(_NOVNC_PORT), "localhost:5900"],
-                                  stdout=_DEVNULL, stderr=_DEVNULL))
-    await asyncio.sleep(1.0)
-
+    procs: list = []
     try:
+        # tear down any previous X stack, then bring up Xvfb -> x11vnc -> websockify(noVNC)
+        for name in ("websockify", "x11vnc", "Xvfb"):
+            _pkill(name)
+        await asyncio.sleep(0.3)
+        procs.append(subprocess.Popen(["Xvfb", display, "-screen", "0", "1360x900x24"],
+                                      stdout=_DEVNULL, stderr=_DEVNULL))
+        await asyncio.sleep(1.0)
+        subprocess.Popen(["x11vnc", "-display", display, "-nopw", "-forever", "-shared",
+                          "-rfbport", "5900", "-quiet"], env=env, stdout=_DEVNULL, stderr=_DEVNULL)
+        procs.append(subprocess.Popen(["websockify", "--web=/usr/share/novnc",
+                                       str(_NOVNC_PORT), "localhost:5900"],
+                                      stdout=_DEVNULL, stderr=_DEVNULL))
+        await asyncio.sleep(1.0)
         pw = await async_playwright().start()
         browser = await pw.chromium.launch(
             headless=False, env=env,
@@ -330,8 +336,11 @@ async def sso_start(req: SsoStartRequest) -> dict:
             pass
     except Exception as e:
         for pr in procs:
-            pr.terminate()
-        return {"error": f"browser launch failed: {type(e).__name__}: {e}"}
+            try:
+                pr.terminate()
+            except Exception:
+                pass
+        return {"error": f"sso start failed: {type(e).__name__}: {e}"}
 
     sid = secrets.token_hex(6)
     _SSO[sid] = {"pw": pw, "browser": browser, "context": context, "procs": procs}
@@ -363,5 +372,5 @@ async def sso_finish(req: SsoFinishRequest) -> dict:
         except Exception:
             pass
     for name in ("websockify", "x11vnc", "Xvfb"):
-        subprocess.run(["pkill", "-f", name], stdout=_DEVNULL, stderr=_DEVNULL)
+        _pkill(name)
     return {"storage_state": state}

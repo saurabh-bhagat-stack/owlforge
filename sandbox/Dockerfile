@@ -16,7 +16,7 @@ RUN apt-get update \
         ca-certificates curl wget unzip \
         nmap dnsutils iputils-ping net-tools \
         jq openssl git \
-        xvfb x11vnc websockify novnc \
+        xvfb x11vnc websockify novnc procps \
         python3 python3-venv python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
