@@ -308,6 +308,7 @@ def _collect_surface(
     *,
     max_pages: int = 25,
     browser_recon_enabled: bool = False,
+    extra_seeds: list[str] | None = None,
     log: Callable[[str], None] = lambda m: None,
 ) -> tuple[list[dict], str]:
     """Build (but DO NOT persist) the surface inventory for one pass, plus a
@@ -329,6 +330,11 @@ def _collect_surface(
             return {"error": str(e)}
 
     inv = crawl(target, request_fn, max_pages=max_pages, log=log)
+    for _seed in (extra_seeds or []):
+        try:
+            inv += crawl(_seed, request_fn, max_pages=max(6, max_pages // 2), log=log)
+        except Exception:
+            pass
     inv += content_discovery(target, sandbox_client, session_headers, log=log)
     inv += js_recon(target, request_fn, log=log)
     inv += api_spec_discovery(target, request_fn, log=log)
@@ -555,9 +561,13 @@ def run_recon(
     # pass 2: authenticated (only if a session was resolved)
     if session_headers:
         log("auth recon (escalated) — re-mapping the logged-in surface")
+        _b = target.rstrip("/")
+        _seeds = [_b + s for s in ("/my-account", "/account", "/dashboard", "/profile",
+                                   "/orders", "/admin", "/settings", "/user")]
         auth_inv, _ = _collect_surface(
             assessment_id, target, session_headers, sandbox_client,
-            max_pages=max_pages, browser_recon_enabled=browser_recon_enabled, log=log)
+            max_pages=max_pages, browser_recon_enabled=browser_recon_enabled,
+            extra_seeds=_seeds, log=log)
         for it in auth_inv:
             key = (it["method"], it["url"], tuple(sorted(it["params"])))
             if key not in unauth_keys:
