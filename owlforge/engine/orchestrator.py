@@ -230,6 +230,12 @@ async def run_orchestrated(
                 _autofile_probe_finding(assessment_id, _r)
             if repros:
                 emit("status", f"[specialist:{cls}] pre-probe auto-filed {len(repros)} confirmed finding(s)")
+            if cls == XSS and rnd == 0:
+                from owlforge.engine.domxss import browser_xss_scan
+                _bx = browser_xss_scan(assessment_id, targets[:8], sandbox, session_headers,
+                                       log=lambda m: emit("status", m))
+                if _bx:
+                    emit("status", f"[specialist:xss] browser scan auto-filed {_bx} executing XSS")
             if cls in GATEABLE and not probed:
                 for t in targets[:16]:
                     done_keys.add((cls, t["url"], t.get("param")))  # don't re-probe dead targets
