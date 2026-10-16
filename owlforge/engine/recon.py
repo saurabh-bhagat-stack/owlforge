@@ -530,6 +530,17 @@ def run_recon(
         except Exception as e:
             return {"error": str(e)}
 
+    # auto-enable browser recon for JS/SPA apps — their real surface (forms, links,
+    # params) is built client-side and invisible to static HTML. Generic: any SPA.
+    if not browser_recon_enabled and sandbox_client is not None:
+        try:
+            fp0 = fingerprint(target, _reqfn)
+            if fp0.get("tech"):
+                browser_recon_enabled = True
+                log(f"browser recon auto-enabled (client-side framework: {', '.join(fp0['tech'])})")
+        except Exception:
+            pass
+
     # pass 1: unauthenticated (always)
     log("unauth recon")
     unauth_inv, header = _collect_surface(
