@@ -374,3 +374,77 @@ async def sso_finish(req: SsoFinishRequest) -> dict:
     for name in ("websockify", "x11vnc", "Xvfb"):
         _pkill(name)
     return {"storage_state": state}
+
+
+
+class InteractRequest(BaseModel):
+    url: str
+    token: str
+    headers: dict[str, str] | None = None
+    check_url: str | None = None
+    wait_until: str = "load"
+    timeout_ms: int = 20_000
+
+
+@app.post("/interact", dependencies=[Depends(auth)])
+async def interact(req: InteractRequest) -> dict:
+    """Browser-driven form interaction for formless/SPA UIs and STORED XSS. Fills every
+    text input/textarea/contenteditable with a sentinel payload, clicks a submit-like
+    control, then checks execution — on a given check_url (stored) or the same page."""
+    import asyncio
+
+    try:
+        from playwright.async_api import async_playwright
+    except Exception as e:
+        return {"error": f"playwright unavailable: {e}"}
+    dialogs: list[str] = []
+    payload = '"><img src=x onerror="window.__owl_xss=' + "'" + req.token + "'" + '">'
+    filled = 0
+    marker = None
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+            context = await browser.new_context(extra_http_headers=req.headers or {},
+                                                ignore_https_errors=True)
+            page = await context.new_page()
+            page.on("dialog", lambda d: (dialogs.append(d.message or ""),
+                                         asyncio.ensure_future(d.dismiss())))
+            await page.goto(req.url, wait_until=req.wait_until, timeout=req.timeout_ms)
+            sel = ("input[type=text], input[type=search], input[type=url], input[type=email], "
+                   "input:not([type]), textarea, [contenteditable='true']")
+            for el in await page.query_selector_all(sel):
+                try:
+                    await el.fill(payload)
+                    filled += 1
+                except Exception:
+                    try:
+                        await el.evaluate("(e,v)=>{e.value=v; if('textContent' in e) e.textContent=v;}", payload)
+                        filled += 1
+                    except Exception:
+                        pass
+            btn = (await page.query_selector("button[type=submit]")
+                   or await page.query_selector("input[type=submit]")
+                   or await page.query_selector("button"))
+            if btn:
+                try:
+                    await btn.click(timeout=4000)
+                except Exception:
+                    pass
+            await page.wait_for_timeout(900)
+            if req.check_url:
+                await page.goto(req.check_url, wait_until=req.wait_until, timeout=req.timeout_ms)
+                await page.wait_for_timeout(600)
+            try:
+                marker = await page.evaluate("() => window.__owl_xss || null")
+            except Exception:
+                marker = None
+            await browser.close()
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}", "filled": filled}
+    via = ""
+    executed = False
+    if marker is not None and str(marker) == req.token:
+        executed, via = True, "script-exec (window.__owl_xss)"
+    elif any(req.token in d for d in dialogs):
+        executed, via = True, "dialog"
+    return {"submitted": filled > 0, "filled": filled, "executed": executed, "via": via}

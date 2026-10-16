@@ -295,6 +295,9 @@ def run(
             from owlforge.engine.stored import stored_scan
             stored_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                         log=lambda m: emit("status", m))
+            from owlforge.engine.storedbrowser import browser_stored_scan
+            browser_stored_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                                log=lambda m: emit("status", m))
         except Exception as e:
             emit("log", f"stored pass failed: {type(e).__name__}: {e}")
         emit("status", "validation phase")

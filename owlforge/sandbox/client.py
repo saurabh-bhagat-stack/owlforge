@@ -85,6 +85,16 @@ class SandboxClient:
         r.raise_for_status()
         return r.json()
 
+    def interact(self, url: str, token: str, *, headers: dict | None = None,
+                 check_url: str | None = None, timeout_ms: int = 20_000) -> dict:
+        """Browser-driven form interaction (fill inputs + submit + observe)."""
+        r = httpx.post(f"{self.base_url}/interact", headers=self._headers(),
+                       json={"url": url, "token": token, "headers": headers,
+                             "check_url": check_url, "timeout_ms": timeout_ms},
+                       timeout=max(self.timeout, timeout_ms / 1000 + 25))
+        r.raise_for_status()
+        return r.json()
+
     def sso_start(self, url: str, *, headers: dict | None = None) -> dict:
         """Start an interactive SSO capture (headed Chromium behind noVNC)."""
         r = httpx.post(f"{self.base_url}/sso/start", headers=self._headers(),
