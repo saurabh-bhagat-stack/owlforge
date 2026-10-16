@@ -10,11 +10,11 @@ from __future__ import annotations
 
 import secrets as _secrets
 
-from owlforge.engine.classify import PATH, SQLI, SSRF, XSS
+from owlforge.engine.classify import PATH, RCE, SQLI, SSRF, SSTI, XSS
 
 # classes with a cheap, sound single-request signal. access_control / csrf need a
 # differential and are NOT gated here (they pass through to the specialist/validator).
-GATEABLE = {SQLI, XSS, PATH, SSRF}
+GATEABLE = {SQLI, XSS, PATH, SSRF, SSTI, RCE}
 
 
 def _http(sandbox, method, url, params, headers):
@@ -56,6 +56,22 @@ def probe(cls: str, target: dict, sandbox, session_headers: dict | None = None) 
         r = _http(sandbox, method, url, {p: "../../../../etc/passwd"}, h)
         if "root:x:0:0" in (r.get("body") or ""):
             return True, f"{p}: /etc/passwd contents returned (path traversal)"
+        return False, ""
+
+    if cls == SSTI:
+        # unique product so a coincidental "49" can't false-positive
+        for payload in ("{{1337*1337}}", "${1337*1337}", "<%=1337*1337%>", "#{1337*1337}"):
+            r = _http(sandbox, method, url, {p: payload}, h)
+            if "1787569" in (r.get("body") or ""):
+                return True, f"{p}: template evaluated {payload} -> 1787569 (SSTI)"
+        return False, ""
+
+    if cls == RCE:
+        for payload in ("1;id", "1|id", "$(id)", "1&&id", "`id`"):
+            r = _http(sandbox, method, url, {p: payload}, h)
+            body = r.get("body") or ""
+            if "uid=" in body and "gid=" in body:
+                return True, f"{p}: command injection {payload} -> id output (uid=/gid=)"
         return False, ""
 
     if cls == SSRF:

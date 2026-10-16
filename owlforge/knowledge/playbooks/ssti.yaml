@@ -1,0 +1,12 @@
+name: ssti
+title: Server-side template injection (SSTI)
+priority: 3
+body: |
+  Surface: any parameter whose value is reflected into a server-rendered template
+  (names, greetings, search, subjects, filenames). Detect: inject a math expression in
+  the engine's syntax and look for the EVALUATED result in the response, not the literal:
+  {{1337*1337}} (Jinja2/Twig), ${1337*1337} (FreeMarker/JSP EL), <%=1337*1337%> (ERB),
+  #{1337*1337} (Thymeleaf/Ruby) -> 1787569 means the template evaluated it.
+  Confirm the engine, then escalate read-only: Jinja2 {{config}} or
+  {{self.__init__.__globals__}}, FreeMarker <#assign>, etc. Proof = the evaluated math
+  or a benign read (config/one file). Do NOT run destructive payloads.

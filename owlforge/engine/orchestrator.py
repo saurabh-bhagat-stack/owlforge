@@ -17,8 +17,10 @@ from owlforge.engine.classify import (
     CSRF,
     OBJECT_ID,
     PATH,
+    RCE,
     SQLI,
     SSRF,
+    SSTI,
     XSS,
     classify_param,
     endpoint_interesting,
@@ -36,6 +38,8 @@ _TITLE = {
     OBJECT_ID: "broken access control / IDOR",
     SSRF: "SSRF / open redirect",
     CSRF: "cross-site request forgery",
+    SSTI: "server-side template injection",
+    RCE: "OS command injection / RCE",
 }
 _HINT = {
     SQLI: "a lone single quote (') that makes the response error/500 and reverts to 200 when balanced ('')",
@@ -45,8 +49,10 @@ _HINT = {
     SSRF: "a URL parameter causing a server-side fetch, or an attacker URL reflected in a redirect/Location",
     CSRF: "a state-changing request still succeeds with the anti-CSRF token omitted/replaced, and no "
           "SameSite cookie or Origin/Referer check blocks a cross-site submission",
+    SSTI: "a template expression is evaluated server-side (e.g. {{1337*1337}} -> 1787569); escalate to code/file read",
+    RCE: "an injected OS command runs (e.g. ;id -> uid=.../gid=...); keep proof read-only (id/hostname)",
 }
-_ORDER = [SQLI, XSS, PATH, OBJECT_ID, SSRF, CSRF]
+_ORDER = [RCE, SSTI, SQLI, XSS, PATH, OBJECT_ID, SSRF, CSRF]
 _MAX_TARGETS = 8  # per specialist — test the highest-interest first, don't dilute budget
 
 

@@ -1,0 +1,10 @@
+name: rce
+title: OS command injection / RCE
+priority: 3
+body: |
+  Surface: parameters that feed a shell/exec (cmd, exec, host, ip, ping, dns, lookup,
+  query, func). Detect with a benign, READ-ONLY command via common separators:
+  ;id  |id  $(id)  `id`  1&&id  -> a response containing uid=... gid=... proves command
+  execution. Also try blind/time-based (;sleep 5) when output is not reflected.
+  Proof must stay read-only: id, hostname, uname. NEVER write, delete, or exfiltrate.
+  File with the exact payload and the uid=/gid= (or timing) evidence.

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from owlforge.engine.classify import CSRF, PATH, SQLI, SSRF, XSS
+from owlforge.engine.classify import CSRF, PATH, RCE, SQLI, SSRF, SSTI, XSS
 from owlforge.engine.preprobe import filter_targets, probe
 
 
@@ -49,3 +49,25 @@ def test_filter_targets_gates_gateable_passes_through_others():
     csrf_targets = [{"url": "https://t/login", "param": None}]
     kept2, notes2 = filter_targets(CSRF, csrf_targets, sb)
     assert kept2 == csrf_targets and notes2 == []
+
+
+def test_probe_ssti_and_rce():
+    class SSTISB:
+        def http_request(self, method, url, *, params=None, headers=None, body=None, timeout_ms=60_000):
+            v = (params or {}).get("name", "")
+            body = "Hello 1787569!" if "1337*1337" in v else "Hello there"
+            return {"status": 200, "body": body}
+    assert probe(SSTI, {"url": "https://t/greet", "param": "name"}, SSTISB())[0] is True
+
+    class RCESB:
+        def http_request(self, method, url, *, params=None, headers=None, body=None, timeout_ms=60_000):
+            v = (params or {}).get("host", "")
+            body = "uid=33(www-data) gid=33(www-data)" if "id" in v and (";" in v or "|" in v or "$" in v or "`" in v) else "pong"
+            return {"status": 200, "body": body}
+    assert probe(RCE, {"url": "https://t/ping", "param": "host"}, RCESB())[0] is True
+
+    class Quiet:
+        def http_request(self, method, url, *, params=None, headers=None, body=None, timeout_ms=60_000):
+            return {"status": 200, "body": "nothing"}
+    assert probe(SSTI, {"url": "https://t/x", "param": "p"}, Quiet())[0] is False
+    assert probe(RCE, {"url": "https://t/x", "param": "p"}, Quiet())[0] is False

@@ -13,11 +13,15 @@ PATH = "path_traversal"
 OBJECT_ID = "access_control"
 SSRF = "ssrf_redirect"
 CSRF = "csrf"
+SSTI = "ssti"
+RCE = "rce"
 
 _ID = ("id", "productid", "userid", "orderid", "accountid", "docid", "itemid", "pid",
        "uid", "gid", "oid", "objectid", "invoiceid", "ticketid", "fileid")
 _URL = ("url", "uri", "redirect", "redir", "next", "return", "returnurl", "callback",
         "dest", "destination", "continue", "goto", "feed", "site")
+_CMD = ("cmd", "command", "exec", "run", "ping", "shell", "code", "process",
+        "system", "func", "query", "host", "ip", "dns", "lookup")
 _PATH = ("file", "filename", "path", "page", "template", "include", "download",
          "doc", "document", "lang", "dir", "folder", "load", "view")
 # (free-text names are already covered by the default sqli/xss tags)
@@ -25,13 +29,15 @@ _PATH = ("file", "filename", "path", "page", "template", "include", "download",
 
 def classify_param(name: str) -> set[str]:
     n = (name or "").lower().strip()
-    tags: set[str] = {SQLI, XSS}  # any param is a default injection candidate
+    tags: set[str] = {SQLI, XSS, SSTI}  # any param is an injection/reflection candidate
     if any(k == n or n.endswith(k) for k in _ID):
         tags.add(OBJECT_ID)
     if any(k in n for k in _URL):
         tags.add(SSRF)
     if any(k in n for k in _PATH):
         tags.add(PATH)
+    if any(k in n for k in _CMD):
+        tags.add(RCE)
     return tags
 
 
