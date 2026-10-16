@@ -353,3 +353,29 @@ def test_dedupe_collapses_same_class_endpoint_keeps_best(isolated):
         assert sess.get(Finding, "d1").status == "validated"
         assert sess.get(Finding, "d2").status == "duplicate"
         assert sess.get(Finding, "d3").status == "candidate"   # different class, kept
+
+
+def test_dedupe_keeps_distinct_observational_titles_same_endpoint(isolated):
+    from owlforge.engine.validate import dedupe_findings
+    from owlforge.store.models import Finding
+
+    def seed(fid, title):
+        with isolated.session() as s:
+            s.add(Finding(id=fid, assessment_id="asmt_o", title=title, severity="low",
+                          status="candidate", endpoint="https://t/", method="GET"))
+            s.commit()
+
+    # distinct passive issues on the SAME endpoint must NOT be merged
+    seed("o1", "Missing Content-Security-Policy")
+    seed("o2", "Missing HSTS")
+    seed("o3", "Missing X-Content-Type-Options: nosniff")
+    # a true duplicate (same title, same endpoint) SHOULD merge
+    seed("o4", "Missing HSTS")
+
+    collapsed = dedupe_findings("asmt_o")
+    assert collapsed == 1   # only the duplicate HSTS collapses
+    with isolated.session() as sess:
+        kept = {f.title for f in sess.exec(__import__("sqlmodel").select(Finding)).all()
+                if f.assessment_id == "asmt_o" and f.status != "duplicate"}
+    assert kept == {"Missing Content-Security-Policy", "Missing HSTS",
+                    "Missing X-Content-Type-Options: nosniff"}

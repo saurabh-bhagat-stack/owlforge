@@ -285,9 +285,14 @@ def dedupe_findings(assessment_id: str, emit: Emitter | None = None) -> int:
         for f in rows:
             if f.status == "duplicate":
                 continue
-            key = (_class_hint(f.title), (f.endpoint or f.repro_url or "").rstrip("/"),
+            hint = _class_hint(f.title)
+            # for observational/"other" findings the TITLE distinguishes distinct issues
+            # (Missing CSP vs Missing HSTS on one page); for known vuln classes the title
+            # is omitted so phrasing variants of the same vuln still collapse.
+            title_key = f.title.strip().lower() if hint == "other" else ""
+            key = (hint, (f.endpoint or f.repro_url or "").rstrip("/"),
                    (f.method or f.repro_method or "GET").upper(),
-                   tuple(sorted((f.repro_params or {}).keys())))
+                   tuple(sorted((f.repro_params or {}).keys())), title_key)
             groups.setdefault(key, []).append(f)
 
         collapsed = 0
