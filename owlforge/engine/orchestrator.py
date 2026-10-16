@@ -168,55 +168,73 @@ async def run_orchestrated(
     target: str,
     max_turns: int = 10,
     scope=None,
+    max_rounds: int = 2,
 ) -> str:
-    inventory = read_blackboard(assessment_id)
-    tasks = plan_tasks(inventory)
-    total = sum(len(v) for v in tasks.values())
-    emit("status", f"orchestrator: {len(inventory)} surface items -> {total} task(s) across {len(tasks)} class(es)")
     registry = build_registry(with_sandbox=sandbox is not None)
-
+    done_keys: set = set()
     ran: list[str] = []
-    for cls in _ORDER:
-        targets = tasks.get(cls)
-        if not targets:
-            continue
-        if scope is not None and not scope.allows_class(cls):
-            emit("status", f"[specialist:{cls}] skipped (not in --only)")
-            continue
-        if scope is not None:
-            targets = [t for t in targets if scope.in_scope(t["url"])]
+
+    for rnd in range(max_rounds):
+        inventory = read_blackboard(assessment_id)
+        tasks = plan_tasks(inventory)
+        if rnd == 0:
+            total = sum(len(v) for v in tasks.values())
+            emit("status", f"orchestrator: {len(inventory)} surface items -> {total} "
+                           f"task(s) across {len(tasks)} class(es)")
+        else:
+            emit("status", f"orchestrator round {rnd + 1}: {len(inventory)} surface items "
+                           "(re-planning on newly-discovered surface)")
+        ran_this_round = 0
+        for cls in _ORDER:
+            targets = tasks.get(cls)
             if not targets:
                 continue
-        targets = sorted(targets, key=lambda t: _priority(cls, t), reverse=True)
-        # deterministic pre-probe: only signal-positive targets earn a specialist
-        probed, probe_notes = filter_targets(cls, targets[:16], sandbox, session_headers)
-        if cls in GATEABLE and not probed:
-            emit("status", f"[specialist:{cls}] skipped (pre-probe found no signal)")
-            continue
-        targets = (probed or targets)[:_MAX_TARGETS]
-        emit("status", f"[specialist:{cls}] testing {len(targets)} target(s) (highest-interest first)")
-        hint = ("\n\nPre-probe ALREADY observed these signals — confirm and exploit them first:\n- "
-                + "\n- ".join(probe_notes[:8])) if probe_notes else ""
-        instr = (
-            f"You are a {_TITLE[cls]} specialist. Test ONLY for {_TITLE[cls]} on the targets below — "
-            f"nothing else. Signal of success: {_HINT[cls]}. Use http_request (put RAW payloads in "
-            f"params; do not url-encode); you may also use exec_command (curl, ffuf, nuclei, the sandbox "
-            f"toolkit) when a request is filtered. Test each target's parameter. The moment you CONFIRM an issue, "
-            "call create_finding with severity, a proof_of_concept, and a STRUCTURED repro: "
-            "repro_url (the endpoint), repro_params with the EXACT raw payload value that triggered it, "
-            "and success_signal (text present ONLY when vulnerable, e.g. 500). Then call finish. Do not "
-            "file what you cannot reproduce." + hint
-        )
-        try:
-            await run_single_agent(
-                client=client, registry=registry, emit=emit, assessment_id=assessment_id,
-                target=target, instructions=instr, scan_mode=scan_mode, max_turns=max_turns,
-                sandbox=sandbox, session_headers=session_headers, surface=_targets_text(targets),
-                expected_signal="; ".join(probe_notes[:4]),
+            if scope is not None and not scope.allows_class(cls):
+                continue
+            if scope is not None:
+                targets = [t for t in targets if scope.in_scope(t["url"])]
+            # drop targets already handled in a previous round
+            targets = [t for t in targets if (cls, t["url"], t.get("param")) not in done_keys]
+            if not targets:
+                continue
+            targets = sorted(targets, key=lambda t: _priority(cls, t), reverse=True)
+            # deterministic pre-probe: only signal-positive targets earn a specialist
+            probed, probe_notes = filter_targets(cls, targets[:16], sandbox, session_headers)
+            if cls in GATEABLE and not probed:
+                for t in targets[:16]:
+                    done_keys.add((cls, t["url"], t.get("param")))  # don't re-probe dead targets
+                if rnd == 0:
+                    emit("status", f"[specialist:{cls}] skipped (pre-probe found no signal)")
+                continue
+            targets = (probed or targets)[:_MAX_TARGETS]
+            emit("status", f"[specialist:{cls}] testing {len(targets)} target(s) (highest-interest first)")
+            hint = ("\n\nPre-probe ALREADY observed these signals — confirm and exploit them first:\n- "
+                    + "\n- ".join(probe_notes[:8])) if probe_notes else ""
+            instr = (
+                f"You are a {_TITLE[cls]} specialist. Test ONLY for {_TITLE[cls]} on the targets below — "
+                f"nothing else. Signal of success: {_HINT[cls]}. Use http_request (put RAW payloads in "
+                f"params; do not url-encode); you may also use exec_command (curl, ffuf, nuclei, the sandbox "
+                f"toolkit) when a request is filtered. Test each target's parameter. The moment you CONFIRM "
+                "an issue, call create_finding with severity, a proof_of_concept, and a STRUCTURED repro: "
+                "repro_url (the endpoint), repro_params with the EXACT raw payload value that triggered it, "
+                "and success_signal (text present ONLY when vulnerable, e.g. 500). Then call finish. Do not "
+                "file what you cannot reproduce." + hint
             )
-        except Exception as e:
-            emit("error", f"specialist {cls} crashed: {type(e).__name__}: {e}")
-        ran.append(cls)
+            try:
+                await run_single_agent(
+                    client=client, registry=registry, emit=emit, assessment_id=assessment_id,
+                    target=target, instructions=instr, scan_mode=scan_mode, max_turns=max_turns,
+                    sandbox=sandbox, session_headers=session_headers, surface=_targets_text(targets),
+                    expected_signal="; ".join(probe_notes[:4]),
+                )
+            except Exception as e:
+                emit("error", f"specialist {cls} crashed: {type(e).__name__}: {e}")
+            for t in targets:
+                done_keys.add((cls, t["url"], t.get("param")))
+            ran.append(cls)
+            ran_this_round += 1
+        if ran_this_round == 0:
+            break
 
     return (f"Orchestrated assessment over {len(inventory)} surface items: ran "
             f"{len(ran)} specialist(s) [{', '.join(ran) or 'none'}].")

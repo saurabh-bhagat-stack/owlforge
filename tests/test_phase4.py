@@ -250,3 +250,25 @@ def test_m6d_file_upload_and_graphql_dispatch():
     ])
     assert {x["param"] for x in tasks.get(FILE_UPLOAD, [])} == {"avatar"}
     assert {x["url"] for x in tasks.get(GRAPHQL, [])} == {"https://t/graphql"}
+
+
+def test_persist_new_dedups_and_caps(tmp_path, monkeypatch):
+    import owlforge.config as config
+    import owlforge.store.db as db
+    monkeypatch.setenv("OWLFORGE_HOME", str(tmp_path))
+    config.load_config.cache_clear()
+    db._engine = None
+    db.init_db()
+    from sqlmodel import select
+
+    from owlforge.engine.recon import persist_new
+    from owlforge.store.models import SurfaceItem
+
+    persist_new("asmt_pn", [{"url": "https://t/a", "method": "GET", "params": [], "source": "discovered"}])
+    # same endpoint path again -> no duplicate
+    persist_new("asmt_pn", [{"url": "https://t/a?x=1", "method": "GET", "params": ["x"], "source": "discovered"}])
+    persist_new("asmt_pn", [{"url": "https://t/b", "method": "GET", "params": [], "source": "discovered"}])
+    with db.session() as s:
+        rows = s.exec(select(SurfaceItem).where(SurfaceItem.assessment_id == "asmt_pn")).all()
+    eps = sorted({r.url for r in rows})
+    assert eps == ["https://t/a", "https://t/b"]

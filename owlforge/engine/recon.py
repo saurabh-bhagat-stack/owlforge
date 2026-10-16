@@ -113,6 +113,42 @@ def persist(assessment_id: str, inventory: list[dict]) -> None:
         s.commit()
 
 
+def persist_new(assessment_id: str, items: list[dict], cap: int = 60) -> int:
+    """Add surface items not already present for this assessment (dedup by method+path).
+    Capped so a chatty specialist can't flood the blackboard. Returns count added."""
+    from urllib.parse import urlsplit
+
+    from owlforge.store.db import session
+    from owlforge.store.models import SurfaceItem
+
+    def _ep(u: str) -> str:
+        sp = urlsplit(u)
+        return f"{sp.netloc}{sp.path}"
+
+    added = 0
+    with session() as s:
+        existing_rows = s.exec(
+            __import__("sqlmodel").select(SurfaceItem).where(SurfaceItem.assessment_id == assessment_id)
+        ).all()
+        seen = {(r.method.upper(), _ep(r.url)) for r in existing_rows}
+        if len(existing_rows) >= cap:
+            return 0
+        for it in items:
+            key = (str(it.get("method", "GET")).upper(), _ep(it["url"]))
+            if key in seen:
+                continue
+            seen.add(key)
+            s.add(SurfaceItem(id=f"surf_{secrets.token_hex(5)}", assessment_id=assessment_id,
+                              url=it["url"], method=it.get("method", "GET"),
+                              params=it.get("params", []), source=it.get("source", "discovered")))
+            added += 1
+            if len(existing_rows) + added >= cap:
+                break
+        if added:
+            s.commit()
+    return added
+
+
 _HIGH_PARAM = ("category", "filter", "search", "query", "term", "keyword", "sort", "q",
                "id", "productid", "postid", "userid", "url", "redirect", "file", "path")
 

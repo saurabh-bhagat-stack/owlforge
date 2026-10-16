@@ -80,6 +80,17 @@ async def _http_request(args: dict[str, Any], ctx: ToolContext) -> str:
         record_attempt(ctx.assessment_id, url, method, args.get("params") or None, d.get("status"))
     except Exception:
         pass
+    try:  # feed genuinely-new endpoints back to the blackboard for the depth loop
+        if int(d.get("status") or 0) < 400:
+            from urllib.parse import parse_qsl, urlsplit
+
+            from owlforge.engine.recon import persist_new
+            sp = urlsplit(url)
+            persist_new(ctx.assessment_id, [{
+                "url": f"{sp.scheme}://{sp.netloc}{sp.path}", "method": method,
+                "params": [k for k, _ in parse_qsl(sp.query)], "source": "discovered"}])
+    except Exception:
+        pass
     hdrs = {k: v for k, v in list(d.get("headers", {}).items())[:15]}
     return (f"status={d.get('status')}\nfinal_url={d.get('final_url')}\n"
             f"headers={hdrs}\nbody[:3000]:\n{str(d.get('body', ''))[:3000]}")
