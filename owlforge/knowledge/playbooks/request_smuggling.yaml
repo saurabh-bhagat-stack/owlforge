@@ -1,0 +1,13 @@
+name: request_smuggling
+title: HTTP request smuggling (CL.TE / TE.CL)
+priority: 7
+body: |
+  Signal: a front-end and back-end disagree on request boundaries when both
+  Content-Length and Transfer-Encoding are present (CL.TE, TE.CL, TE.TE). Reliable
+  testing needs RAW socket control and timing — a normal HTTP client normalises the
+  request, so use exec_command with a crafted raw request (printf | openssl s_client,
+  or a tool) and look for the time-delay / response-desync signature. If you cannot
+  control the raw bytes, record it as a candidate for manual testing rather than
+  guessing. (owlforge's raw-transport adapter lands in a later milestone; until then
+  this is best-effort via exec_command.) Never poison shared infrastructure beyond a
+  benign proof.
