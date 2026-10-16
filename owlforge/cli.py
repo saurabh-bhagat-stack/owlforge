@@ -184,11 +184,27 @@ def run(
         try:
             _idents = establish_all(load_identities(identities), _estab_reqfn,
                                     log=lambda m: console.print(rf"[dim]\[identities] {m}[/]"))
+            # interactive SSO/MFA capture for any 'sso' identity (sandbox browser + noVNC)
+            _sso_idents = [i for i in _idents if i.needs_sso]
+            if _sso_idents and sandbox_client is not None and sandbox_session is not None:
+                from owlforge.engine.authbroker import capture_sso_session, storage_state_to_cookie
+                for ident in _sso_idents:
+                    login_url = ident.auth.get("url") or target
+                    ppath = str(assessments_dir() / aid / f"sso_{ident.label}.json")
+                    state = capture_sso_session(
+                        sandbox_client, sandbox_session.novnc_url, login_url,
+                        persist_path=ppath, prompt_fn=console.input,
+                        log=lambda m: console.print(m))
+                    ident.session_headers = storage_state_to_cookie(state, target)
+                    ident.established = bool(ident.session_headers)
+            elif _sso_idents:
+                console.print("[yellow]SSO identities need the sandbox; none active — skipped.[/]")
+
             _prim = primary_identity(_idents)
             _ok = sum(1 for i in _idents if i.session_headers)
-            _sso = [i.label for i in _idents if i.needs_sso]
+            _pending = [i.label for i in _idents if i.needs_sso and not i.session_headers]
             console.print(f"[dim]identities: {len(_idents)} loaded, {_ok} with a session"
-                          + (f"; SSO pending: {', '.join(_sso)}" if _sso else "") + "[/]")
+                          + (f"; SSO pending: {', '.join(_pending)}" if _pending else "") + "[/]")
             if _prim and _prim.session_headers:
                 user_auth = AuthContext(mode="session", headers=_prim.session_headers)
         except Exception as e:

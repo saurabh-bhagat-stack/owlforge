@@ -19,6 +19,7 @@ from pathlib import Path
 from owlforge.sandbox.client import SandboxClient
 
 AGENTD_CONTAINER_PORT = 47130
+NOVNC_CONTAINER_PORT = 6080
 Logger = Callable[[str], None]
 
 
@@ -30,6 +31,13 @@ class SandboxSession:
     token: str
     workspace: str
     client: SandboxClient
+    novnc_host_port: int = 0
+
+    @property
+    def novnc_url(self) -> str:
+        if not self.novnc_host_port:
+            return ""
+        return f"http://127.0.0.1:{self.novnc_host_port}/vnc.html?autoconnect=1&resize=scale"
 
 
 def _run(args: list[str], timeout: float = 60.0) -> subprocess.CompletedProcess:
@@ -73,6 +81,7 @@ def start(
     name = name or f"owlforge-{secrets.token_hex(4)}"
     token = secrets.token_hex(16)
     host_port = _free_port()
+    novnc_port = _free_port()
     Path(workspace).mkdir(parents=True, exist_ok=True)
 
     _run(["docker", "rm", "-f", name], timeout=20)  # clear any stale container of this name
@@ -80,10 +89,12 @@ def start(
     args = [
         "docker", "run", "-d", "--name", name,
         "-p", f"127.0.0.1:{host_port}:{AGENTD_CONTAINER_PORT}",
+        "-p", f"127.0.0.1:{novnc_port}:{NOVNC_CONTAINER_PORT}",
         "--add-host", "host.docker.internal:host-gateway",
         "--cap-add", "NET_ADMIN", "--cap-add", "NET_RAW",
         "-e", f"OWLFORGE_AGENTD_TOKEN={token}",
         "-e", f"OWLFORGE_AGENTD_PORT={AGENTD_CONTAINER_PORT}",
+        "-e", f"OWLFORGE_NOVNC_PORT={NOVNC_CONTAINER_PORT}",
         "-e", "OWLFORGE_WORKSPACE=/workspace",
         "-v", f"{workspace}:/workspace",
         image, 
@@ -99,7 +110,8 @@ def start(
     while time.monotonic() < deadline:
         if client.health():
             log(f"sandbox healthy ({name}, {container_id[:12]})")
-            return SandboxSession(name, container_id, host_port, token, workspace, client)
+            return SandboxSession(name, container_id, host_port, token, workspace, client,
+                                  novnc_host_port=novnc_port)
         time.sleep(1.0)
 
     logs = _run(["docker", "logs", "--tail", "40", name], timeout=15).stdout

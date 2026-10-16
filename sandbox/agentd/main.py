@@ -17,6 +17,8 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
+import subprocess
 import time
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
@@ -268,3 +270,98 @@ async def xss_check(req: XssCheckRequest) -> dict:
     elif any(req.token in d for d in dialogs):
         executed, via = True, "dialog (alert/confirm/prompt)"
     return {"executed": executed, "via": via, "status": status, "dialogs": dialogs[:5]}
+
+
+
+# --- interactive SSO/MFA capture: headed Chromium in-container, exposed via noVNC ---
+_SSO: dict[str, dict] = {}
+_NOVNC_PORT = int(os.environ.get("OWLFORGE_NOVNC_PORT", "6080"))
+_DEVNULL = subprocess.DEVNULL
+
+
+class SsoStartRequest(BaseModel):
+    url: str
+    headers: dict[str, str] | None = None
+
+
+class SsoFinishRequest(BaseModel):
+    session_id: str
+
+
+@app.post("/sso/start", dependencies=[Depends(auth)])
+async def sso_start(req: SsoStartRequest) -> dict:
+    """Launch a HEADED Chromium at the login URL on a virtual display and expose it via
+    noVNC so the operator can complete SSO/MFA. Returns a session id; the browser stays
+    alive until /sso/finish captures its storage_state."""
+    try:
+        from playwright.async_api import async_playwright
+    except Exception as e:
+        return {"error": f"playwright unavailable: {e}"}
+
+    display = ":99"
+    env = dict(os.environ)
+    env["DISPLAY"] = display
+    # tear down any previous X stack, then bring up Xvfb -> x11vnc -> websockify(noVNC)
+    for name in ("websockify", "x11vnc", "Xvfb"):
+        subprocess.run(["pkill", "-f", name], stdout=_DEVNULL, stderr=_DEVNULL)
+    await asyncio.sleep(0.3)
+    procs = []
+    procs.append(subprocess.Popen(["Xvfb", display, "-screen", "0", "1360x900x24"],
+                                  stdout=_DEVNULL, stderr=_DEVNULL))
+    await asyncio.sleep(1.0)
+    subprocess.Popen(["x11vnc", "-display", display, "-nopw", "-forever", "-shared",
+                      "-rfbport", "5900", "-quiet"], env=env, stdout=_DEVNULL, stderr=_DEVNULL)
+    procs.append(subprocess.Popen(["websockify", "--web=/usr/share/novnc",
+                                   str(_NOVNC_PORT), "localhost:5900"],
+                                  stdout=_DEVNULL, stderr=_DEVNULL))
+    await asyncio.sleep(1.0)
+
+    try:
+        pw = await async_playwright().start()
+        browser = await pw.chromium.launch(
+            headless=False, env=env,
+            args=["--no-sandbox", "--disable-dev-shm-usage", "--start-maximized"])
+        context = await browser.new_context(extra_http_headers=req.headers or {},
+                                            ignore_https_errors=True, no_viewport=True)
+        page = await context.new_page()
+        try:
+            await page.goto(req.url, wait_until="load", timeout=30_000)
+        except Exception:
+            pass
+    except Exception as e:
+        for pr in procs:
+            pr.terminate()
+        return {"error": f"browser launch failed: {type(e).__name__}: {e}"}
+
+    sid = secrets.token_hex(6)
+    _SSO[sid] = {"pw": pw, "browser": browser, "context": context, "procs": procs}
+    return {"session_id": sid, "novnc_port": _NOVNC_PORT,
+            "novnc_path": "/vnc.html?autoconnect=1&resize=scale"}
+
+
+@app.post("/sso/finish", dependencies=[Depends(auth)])
+async def sso_finish(req: SsoFinishRequest) -> dict:
+    """Capture the authenticated storage_state (cookies + localStorage) from the live
+    SSO session, tear down the browser + X stack, and return it for reuse."""
+    sess = _SSO.pop(req.session_id, None)
+    if not sess:
+        return {"error": "no such sso session"}
+    state = {}
+    try:
+        state = await sess["context"].storage_state()
+    except Exception as e:
+        state = {"error": f"storage_state failed: {type(e).__name__}: {e}"}
+    for key in ("browser", "pw"):
+        try:
+            obj = sess.get(key)
+            await (obj.close() if key == "browser" else obj.stop())
+        except Exception:
+            pass
+    for pr in sess.get("procs", []):
+        try:
+            pr.terminate()
+        except Exception:
+            pass
+    for name in ("websockify", "x11vnc", "Xvfb"):
+        subprocess.run(["pkill", "-f", name], stdout=_DEVNULL, stderr=_DEVNULL)
+    return {"storage_state": state}

@@ -85,6 +85,20 @@ class SandboxClient:
         r.raise_for_status()
         return r.json()
 
+    def sso_start(self, url: str, *, headers: dict | None = None) -> dict:
+        """Start an interactive SSO capture (headed Chromium behind noVNC)."""
+        r = httpx.post(f"{self.base_url}/sso/start", headers=self._headers(),
+                       json={"url": url, "headers": headers}, timeout=90.0)
+        r.raise_for_status()
+        return r.json()
+
+    def sso_finish(self, session_id: str) -> dict:
+        """Capture storage_state from the live SSO session and tear it down."""
+        r = httpx.post(f"{self.base_url}/sso/finish", headers=self._headers(),
+                       json={"session_id": session_id}, timeout=60.0)
+        r.raise_for_status()
+        return r.json()
+
     def xss_check(self, url: str, token: str, *, headers: dict | None = None,
                   timeout_ms: int = 15_000) -> dict:
         """Confirm XSS by execution in real Chromium. Returns {executed, via, status}."""

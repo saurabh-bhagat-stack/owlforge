@@ -16,6 +16,7 @@ RUN apt-get update \
         ca-certificates curl wget unzip \
         nmap dnsutils iputils-ping net-tools \
         jq openssl git \
+        xvfb x11vnc websockify novnc \
         python3 python3-venv python3-pip \
     && rm -rf /var/lib/apt/lists/*
 
@@ -49,5 +50,5 @@ COPY entrypoint.sh /opt/owlforge/entrypoint.sh
 RUN chmod +x /opt/owlforge/entrypoint.sh && mkdir -p /workspace
 
 COPY wordlists /opt/owlforge/wordlists
-EXPOSE 47130
+EXPOSE 47130 6080
 ENTRYPOINT ["/opt/owlforge/entrypoint.sh"]
