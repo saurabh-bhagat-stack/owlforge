@@ -28,8 +28,11 @@ assessment engine. Supersedes ad-hoc notes; `docs/ARCHITECTURE.md` and
 - **Identity / Role manager** — N role-labelled sessions (unauth + userA + userB +
   low-priv + admin) for horizontal/vertical access-control testing.
 - **Auth broker** — acquires each session: form-login / TOTP-seed (automated);
-  SSO / push / SMS-OTP / CAPTCHA (human-in-the-loop via headed browser +
-  storage_state capture); session-liveness monitor (re-auth on expiry).
+  SSO / push / SMS-OTP / CAPTCHA (human-in-the-loop). The interactive login runs in
+  the SANDBOX's own Playwright/Chromium (already in the image), exposed to the operator
+  over CDP / noVNC to complete it; owlforge then captures `storage_state` and persists it
+  to a project-local file (identities yaml / .env) for reuse. Session-liveness monitor
+  re-auths on expiry. No browser install on the operator's machine.
 - **CSRF token manager** — transport-level fetch-extract-resubmit for rotating
   tokens (synchroniser + double-submit); header or hidden-field placement.
 - **Blackboard** — annotated surface (endpoints, params, forms, JS/API routes,
@@ -111,9 +114,10 @@ Mapping, not coverage.
 ## 5. Scope model
 
 - `-u/--target` sets the **primary in-scope origin(s)**.
-- **Auto-include** hosts the app itself depends on, discovered during recon/login
-  (same-site, API subdomain, SSO callback) — the app's own surface, not arbitrary
-  external links.
+- **Auto-include** every host the app itself reaches through its own functionality,
+  discovered during recon/interaction/login — a separate API origin counts (e.g.
+  `abcui.com` + `abcapi.com`, or `ui.abc.com` + `api.abc.com`): whatever the app calls
+  while exercising real features is in scope. Arbitrary external links are not.
 - `--scope` — extra allowed hosts / path-globs / features to **include**.
 - `--out-of-scope` — hosts / path-globs / features to **exclude** (exclusion wins).
 - `--only <classes>` — restrict to specific vuln classes (e.g. `xss,sqli`).
