@@ -43,11 +43,11 @@ def test_probe_negative_when_no_signal():
 def test_filter_targets_gates_gateable_passes_through_others():
     sb = _SB()
     sqli_targets = [{"url": "https://t/c", "param": "category"}, {"url": "https://t/c", "param": "x"}]
-    kept, notes = filter_targets(SQLI, sqli_targets, sb)
+    kept, notes, repros = filter_targets(SQLI, sqli_targets, sb)
     assert [t["param"] for t in kept] == ["category"] and notes          # only the one with signal
     # non-gateable class passes through untouched (differential handled later)
     csrf_targets = [{"url": "https://t/login", "param": None}]
-    kept2, notes2 = filter_targets(CSRF, csrf_targets, sb)
+    kept2, notes2, repros2 = filter_targets(CSRF, csrf_targets, sb)
     assert kept2 == csrf_targets and notes2 == []
 
 

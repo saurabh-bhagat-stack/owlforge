@@ -157,6 +157,32 @@ def _targets_text(targets: list[dict], limit: int = 30) -> str:
     return "\n".join(lines)
 
 
+def _autofile_probe_finding(assessment_id: str, repro: dict) -> None:
+    """Deterministically file a finding the pre-probe already CONFIRMED, so recall never
+    depends on the LLM remembering to call create_finding. Validation re-tests it."""
+    import secrets as _secrets
+
+    from owlforge.store.db import session
+    from owlforge.store.models import Finding
+
+    with session() as s:
+        s.add(Finding(
+            id=f"find_{_secrets.token_hex(5)}", assessment_id=assessment_id,
+            title=repro["title"], severity=repro.get("severity", "medium"),
+            endpoint=repro["url"], method=repro.get("method", "GET"),
+            technical_analysis=f"A deterministic pre-probe confirmed this at {repro['url']} "
+                               f"(param {repro['param']}, payload {repro['payload']!r}).",
+            proof_of_concept=f"{repro['param']}={repro['payload']} -> signal '{repro['success_signal']}'",
+            evidence=f"param {repro['param']} payload {repro['payload']!r} -> {repro['success_signal']}",
+            impact="See the vulnerability class description.",
+            remediation="Validate/encode/parameterize the affected input per its class.",
+            repro_url=repro["url"], repro_method=repro.get("method", "GET"),
+            repro_params={repro["param"]: repro["payload"]}, success_signal=repro["success_signal"],
+            status="candidate", confidence="high",
+            validation_note="deterministic pre-probe (auto-filed)"))
+        s.commit()
+
+
 async def run_orchestrated(
     *,
     assessment_id: str,
@@ -199,7 +225,11 @@ async def run_orchestrated(
                 continue
             targets = sorted(targets, key=lambda t: _priority(cls, t), reverse=True)
             # deterministic pre-probe: only signal-positive targets earn a specialist
-            probed, probe_notes = filter_targets(cls, targets[:16], sandbox, session_headers)
+            probed, probe_notes, repros = filter_targets(cls, targets[:16], sandbox, session_headers)
+            for _r in repros:
+                _autofile_probe_finding(assessment_id, _r)
+            if repros:
+                emit("status", f"[specialist:{cls}] pre-probe auto-filed {len(repros)} confirmed finding(s)")
             if cls in GATEABLE and not probed:
                 for t in targets[:16]:
                     done_keys.add((cls, t["url"], t.get("param")))  # don't re-probe dead targets

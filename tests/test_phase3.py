@@ -431,3 +431,25 @@ def test_cross_identity_rejects_when_boundary_enforced(isolated):
     counts = asyncio.run(validate_findings(
         assessment_id="asmt_pe2", sandbox=_OnlyAdmin(), emit=Emitter("asmt_pe2", persist=False), identities=ids))
     assert counts["rejected"] == 1 and counts["validated"] == 0
+
+
+def test_autofiled_probe_finding_validates(isolated):
+    from sqlmodel import select
+
+    from owlforge.engine.orchestrator import _autofile_probe_finding
+    from owlforge.engine.validate import validate_findings
+    from owlforge.store.models import Finding
+
+    # the pre-probe confirmed SQLi deterministically; owlforge files it itself
+    _autofile_probe_finding("asmt_af", {
+        "url": "https://t/catalog", "param": "category", "method": "GET",
+        "payload": "'", "success_signal": "500",
+        "title": "SQL injection (error-based)", "severity": "high"})
+    with isolated.session() as s:
+        row = s.exec(select(Finding).where(Finding.assessment_id == "asmt_af")).one()
+        assert row.status == "candidate" and "auto-filed" in (row.validation_note or "")
+
+    # validation re-issues the repro; the fake returns 500 for category=' -> validated
+    counts = asyncio.run(validate_findings(
+        assessment_id="asmt_af", sandbox=_FakeSandbox("err"), emit=Emitter("asmt_af", persist=False)))
+    assert counts["validated"] == 1
