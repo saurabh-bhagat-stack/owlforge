@@ -353,8 +353,14 @@ def _collect_surface(
     inv += api_spec_discovery(target, request_fn, log=log)
     inv += graphql_probe(target, request_fn, log=log)
     if browser_recon_enabled:
-        _pages = [it["url"] for it in inv if it.get("source") in ("link", "content-discovery")][:6]
-        inv += browser_recon(target, sandbox_client, pages=_pages, session_headers=session_headers, log=log)
+        # interactive map first (drives the SPA, captures XHR/fetch + forms the static
+        # crawl misses); fall back to a snapshot render only if it yields nothing.
+        mapped = browser_map(target, sandbox_client, session_headers=session_headers, log=log)
+        inv += mapped
+        if not mapped:
+            _pages = [it["url"] for it in inv if it.get("source") in ("link", "content-discovery")][:6]
+            inv += browser_recon(target, sandbox_client, pages=_pages,
+                                 session_headers=session_headers, log=log)
     inv = _dedup(inv)
 
     fp = fingerprint(target, request_fn)
@@ -792,6 +798,67 @@ def browser_recon(
         out.extend(extract_surface(d.get("final_url", u), d.get("html", "") or ""))
         rendered += 1
     log(f"browser recon: rendered {rendered} page(s), {len(out)} item(s)")
+    return out
+
+
+def browser_map(
+    target: str,
+    sandbox_client,
+    session_headers: dict | None = None,
+    max_pages: int = 12,
+    log: Callable[[str], None] = lambda m: None,
+) -> list[dict]:
+    """Browser-driven INTERACTIVE recon (the real-world/SPA path). Drives Chromium
+    through the app via agentd /map, capturing every XHR/fetch/document request the
+    JS makes plus rendered links & forms. Converts that live traffic into surface
+    items -- recovering formless/JS-built API calls that static crawl never sees.
+    Non-destructive (no form fills/submits). Carries the auth session."""
+    if sandbox_client is None:
+        log("interactive map skipped (no sandbox)")
+        return []
+    try:
+        d = sandbox_client.map(target, headers=(session_headers or None), max_pages=max_pages)
+    except Exception as e:
+        log(f"interactive map error: {e}")
+        return []
+    if d.get("error") and not d.get("requests"):
+        log(f"interactive map: {d['error']}")
+        return []
+
+    out: list[dict] = []
+
+    def _params(u: str) -> list[str]:
+        try:
+            return sorted(parse_qs(urlparse(u).query).keys())
+        except Exception:
+            return []
+
+    for r in d.get("requests", []):
+        url = r.get("url", "")
+        if not url:
+            continue
+        rt = r.get("type", "")
+        src = "browser-xhr" if rt in ("xhr", "fetch") else "browser-nav"
+        out.append({"url": _strip(url), "method": (r.get("method") or "GET").upper(),
+                    "params": _params(url), "source": src})
+    for f in d.get("forms", []):
+        action = f.get("action", "")
+        if not action:
+            continue
+        names = sorted({fl.get("name", "") for fl in f.get("fields", []) if fl.get("name")})
+        out.append({"url": _strip(action), "method": (f.get("method") or "GET").upper(),
+                    "params": names, "source": "browser-form"})
+    for lnk in d.get("links", []):
+        out.append({"url": _strip(lnk), "method": "GET", "params": _params(lnk),
+                    "source": "browser-link"})
+
+    out = _dedup(out)
+    pages = len(d.get("pages", []))
+    nxhr = sum(1 for r in d.get("requests", []) if r.get("type") in ("xhr", "fetch"))
+    ws = d.get("websockets", [])
+    log(f"interactive map: visited {pages} route(s), {nxhr} xhr/fetch call(s), "
+        f"{len(d.get('forms', []))} form(s), {len(out)} surface item(s)"
+        + (f", {len(ws)} websocket(s)" if ws else ""))
     return out
 
 

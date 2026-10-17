@@ -85,6 +85,21 @@ class SandboxClient:
         r.raise_for_status()
         return r.json()
 
+    def map(self, url: str, *, headers: dict | None = None, max_pages: int = 12,
+            max_clicks: int = 10, timeout_ms: int = 20_000) -> dict:
+        """Browser-driven INTERACTIVE recon: drive Chromium through the SPA, capture all
+        XHR/fetch/websocket traffic and rendered links/forms (non-destructive)."""
+        budget = (max_pages * timeout_ms / 1000) + 30
+        r = httpx.post(
+            f"{self.base_url}/map",
+            headers=self._headers(),
+            json={"url": url, "headers": headers, "max_pages": max_pages,
+                  "max_clicks": max_clicks, "timeout_ms": timeout_ms},
+            timeout=max(self.timeout, budget),
+        )
+        r.raise_for_status()
+        return r.json()
+
     def smuggle_probe(self, url: str, *, timeout_s: float = 10.0) -> dict:
         """Time-based request-smuggling (CL.TE/TE.CL) detection."""
         r = httpx.post(f"{self.base_url}/smuggle_probe", headers=self._headers(),

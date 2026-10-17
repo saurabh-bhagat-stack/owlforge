@@ -451,6 +451,198 @@ async def interact(req: InteractRequest) -> dict:
 
 
 
+class MapRequest(BaseModel):
+    url: str
+    headers: dict[str, str] | None = None
+    max_pages: int = 12
+    max_clicks: int = 10
+    wait_until: str = "networkidle"
+    timeout_ms: int = 20_000
+
+
+@app.post("/map", dependencies=[Depends(auth)])
+async def map_app(req: MapRequest) -> dict:
+    """Browser-driven INTERACTIVE recon for SPAs. Drives real Chromium like a user:
+    loads the app, follows same-origin in-app navigation (bounded BFS), and clicks
+    disclosure/nav controls (tabs, menus, accordions) to reveal lazy-loaded surface.
+    Captures EVERY network request the app makes (XHR/fetch/document/websocket) via a
+    context-level listener -- this is how formless/JS-built API calls that never appear
+    in the raw HTML are discovered. It is strictly NON-DESTRUCTIVE: it never fills or
+    submits forms and never clicks submit controls (mutations are out of scope here).
+    Returns a structured map: pages, requests, forms, links, websockets."""
+    from urllib.parse import urlparse, urlsplit, urlunsplit
+
+    try:
+        from playwright.async_api import async_playwright
+    except Exception as e:
+        return {"error": f"playwright unavailable: {e}"}
+
+    def _norm(u: str) -> str:
+        try:
+            p = urlsplit(u)
+            return urlunsplit((p.scheme, p.netloc, p.path or "/", p.query, ""))
+        except Exception:
+            return u
+
+    origin_host = urlparse(req.url).netloc
+    reqs: dict[tuple, dict] = {}
+    wsockets: set[str] = set()
+
+    def _same_site(netloc: str) -> bool:
+        if not netloc:
+            return True  # relative -> same
+        a = origin_host.split(":")[0].split(".")
+        b = netloc.split(":")[0].split(".")
+        return a[-2:] == b[-2:]
+
+    def _on_request(r) -> None:
+        try:
+            u = r.url
+            nl = urlparse(u).netloc
+            if not _same_site(nl):
+                return
+            if u.lower().split("?")[0].endswith(
+                (".png", ".jpg", ".jpeg", ".gif", ".svg", ".woff", ".woff2",
+                 ".ttf", ".ico", ".css", ".map")
+            ):
+                return
+            rt = r.resource_type
+            key = (r.method, _norm(u))
+            if key not in reqs:
+                reqs[key] = {"method": r.method, "url": _norm(u), "type": rt}
+        except Exception:
+            pass
+
+    def _on_ws(ws) -> None:
+        try:
+            if _same_site(urlparse(ws.url).netloc):
+                wsockets.add(ws.url)
+        except Exception:
+            pass
+
+    pages: list[dict] = []
+    forms: list[dict] = []
+    links: set[str] = set()
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+            context = await browser.new_context(
+                extra_http_headers=req.headers or {}, ignore_https_errors=True
+            )
+            context.on("request", _on_request)
+            context.on("websocket", _on_ws)
+            page = await context.new_page()
+
+            queue: list[str] = [req.url]
+            visited: set[str] = set()
+            while queue and len(visited) < req.max_pages:
+                url = queue.pop(0)
+                if _norm(url) in visited:
+                    continue
+                visited.add(_norm(url))
+                try:
+                    await page.goto(url, wait_until=req.wait_until, timeout=req.timeout_ms)
+                except Exception:
+                    try:
+                        await page.goto(url, wait_until="load", timeout=req.timeout_ms)
+                    except Exception:
+                        continue
+                try:
+                    await page.wait_for_timeout(700)
+                except Exception:
+                    pass
+
+                # disclosure/nav clicks: reveal lazy SPA surface WITHOUT submitting anything
+                try:
+                    toggles = await page.query_selector_all(
+                        "[role=tab], [role=menuitem], [aria-haspopup], "
+                        "button[aria-expanded], [data-toggle], summary"
+                    )
+                    clicks = 0
+                    for el in toggles:
+                        if clicks >= req.max_clicks:
+                            break
+                        try:
+                            in_form = await el.evaluate("e => !!e.closest('form')")
+                            etype = (await el.get_attribute("type") or "").lower()
+                            if in_form or etype == "submit":
+                                continue
+                            before = page.url
+                            await el.click(timeout=1500, no_wait_after=True)
+                            await page.wait_for_timeout(300)
+                            if page.url != before:  # navigated away: come back, don't chase
+                                await page.goto(url, wait_until="load", timeout=req.timeout_ms)
+                                await page.wait_for_timeout(300)
+                            clicks += 1
+                        except Exception:
+                            pass
+                except Exception:
+                    pass
+
+                try:
+                    title = await page.title()
+                except Exception:
+                    title = ""
+                pages.append({"url": _norm(page.url), "title": (title or "")[:120]})
+
+                # harvest rendered DOM: anchors + forms (with fields)
+                try:
+                    hrefs = await page.evaluate(
+                        "() => Array.from(document.querySelectorAll('a[href]'))"
+                        ".map(a => a.href)"
+                    )
+                except Exception:
+                    hrefs = []
+                for h in hrefs or []:
+                    try:
+                        p = urlparse(h)
+                        if p.scheme not in ("http", "https") or not _same_site(p.netloc):
+                            continue
+                        links.add(_norm(h))
+                        if _norm(h) not in visited and len(visited) + len(queue) < req.max_pages:
+                            queue.append(h)
+                    except Exception:
+                        pass
+                try:
+                    page_forms = await page.evaluate(
+                        "() => Array.from(document.querySelectorAll('form')).map(f => ({"
+                        "action: f.action || location.href,"
+                        "method: (f.method || 'GET').toUpperCase(),"
+                        "fields: Array.from(f.querySelectorAll('input,textarea,select'))"
+                        ".map(i => ({name: i.name || i.id || '', type: i.type || i.tagName.toLowerCase()}))"
+                        ".filter(x => x.name)"
+                        "}))"
+                    )
+                except Exception:
+                    page_forms = []
+                for f in page_forms or []:
+                    try:
+                        if _same_site(urlparse(f.get("action", "")).netloc):
+                            forms.append(f)
+                    except Exception:
+                        pass
+            await browser.close()
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}", "requests": list(reqs.values())}
+
+    # dedup forms by (action, method, field-name-set)
+    seen_f: set[tuple] = set()
+    uforms: list[dict] = []
+    for f in forms:
+        k = (f.get("action"), f.get("method"),
+             tuple(sorted(x.get("name", "") for x in f.get("fields", []))))
+        if k not in seen_f:
+            seen_f.add(k)
+            uforms.append(f)
+    return {
+        "pages": pages[:60],
+        "requests": list(reqs.values())[:300],
+        "forms": uforms[:60],
+        "links": sorted(links)[:200],
+        "websockets": sorted(wsockets)[:20],
+    }
+
+
 class WsProbeRequest(BaseModel):
     url: str
     messages: list[str] | None = None
