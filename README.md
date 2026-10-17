@@ -1,92 +1,155 @@
 # owlforge
 
-A **local-first, autonomous, agentic penetration-testing platform**. Point it at a
-target, and a local LLM drives recon → multi-agent testing → evidence-gated validation
-→ a report, with all tooling running inside an isolated sandbox container.
+A **local-first, model-agnostic, autonomous web-application penetration-testing
+platform**. Point it at an authorized target and a model you choose drives the whole
+assessment — recon → understanding → authentication → planning → multi-agent testing →
+evidence-gated validation → report — with all tooling running inside an isolated sandbox
+container you build yourself.
 
-Original work — inspired by the best ideas across the field (Strix, XBOW, et al.) but
-its own architecture and engine.
+Original work — inspired by the best ideas across the field (Strix, XBOW, et al.) but its
+own architecture and engine.
 
-> ⚠️ **Status: active early development.** The engine works end to end; interfaces and
-> schema still change. Only test systems you are authorized to assess.
+> ⚠️ **Status: active development.** The engine works end to end on real targets;
+> interfaces and schema still change. **Only test systems you are authorized to assess.**
 
 ## Why local-first
-owlforge is built to be driven by a **local** model (any OpenAI-compatible endpoint:
-Ollama / Jan / LM Studio / llama.cpp). Designing for a modest local model forces a
-robust, model-agnostic harness — which then runs even better on a frontier model. Hosted
-models work too (via the same OpenAI-compatible client); they're optional.
+owlforge is built to be driven by a **local** model (any OpenAI-compatible endpoint —
+Ollama / Jan / LM Studio / llama.cpp). Designing for a modest local model forces a robust,
+model-agnostic harness: the deterministic recon, pre-probe, and evidence gate do the
+reliable work, so the model doesn't have to. That same harness then runs **even better on
+a frontier model** through the identical OpenAI-compatible path — no special-casing.
 
 ## How it works
 ```
-recon (deterministic)        →  blackboard        →  orchestrator      →  specialists         →  validation         →  report
-crawl + content-discovery       attack-surface        classify params      focused per-class       re-run the PoC         markdown
-+ JS + fingerprint              inventory (SQLite)     -> plan tasks        agents (SQLi/XSS/…)     (evidence-gated)
+SETUP → RECON → UNDERSTAND → AUTH → PLAN → HUNT → VALIDATE → DEEPEN → dedupe → REPORT
+        (always   (secrets/   (auto-  (orchestr-  (special-  (evidence   (opt-in
+         unauth    PII/JS→API)  escal-  ator +      ist        gate)       read-only
+         first)                 ate)    PRE-PROBE)  agents)                proof)
 ```
-- **Recon is deterministic** (a crawler + ffuf content discovery + JS/param extraction) —
-  it reliably maps the surface so the LLM doesn't have to remember to enumerate.
-- **Orchestrator** classifies each parameter and dispatches **focused specialist agents**.
-- **Validation is evidence-gated**: a finding is only `validated` if owlforge re-runs its
-  proof-of-concept and the success signal reproduces — not because the model asserted it.
-- Runs **unauthenticated or authenticated** (session cookie / header / form login).
+- **Recon is deterministic.** A crawler + ffuf content-discovery + JS/param extraction +
+  fingerprint map the surface. For JS-heavy SPAs it adds **browser-driven interactive
+  recon** (real Chromium navigates routes, clicks menus/tabs, and captures every
+  XHR/fetch/websocket the app makes) so dynamically-built API endpoints that never appear
+  in the raw HTML are discovered too — non-destructively (it never submits forms).
+- **Auth is one pipeline, not a mode.** Unauth recon runs first; owlforge then
+  auto-escalates to an authenticated pass when credentials are provided, discovered
+  (leaked in JS/exposed files), or **harvested from the login page**. SSO/MFA is captured
+  via a headed in-sandbox browser exposed over noVNC (human-in-the-loop); TOTP is
+  automated (RFC-6238).
+- **Planning gates the model.** The orchestrator classifies every parameter and a
+  deterministic **pre-probe** tests each gateable class first; it **auto-files** findings
+  it confirms itself, so recall never depends on the model remembering to file.
+- **Specialists** are focused per-class agents (SQLi/XSS/SSRF/…), with an enforced
+  **bypass loop** when a signal is confirmed but the agent gives up.
+- **Validation is evidence-gated.** A finding is `validated` only if owlforge reproduces
+  its proof — SQLi by re-issuing the structured PoC and matching the signal, **XSS by
+  actual browser execution** (encoded/non-executing reflections are rejected),
+  access-control by **differential testing** across identities. No model assertion counts
+  as proof.
+- **Found secrets, keys, and PII are reported IN FULL** as evidence — owlforge does not
+  redact what it proves.
 
-See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) and [`docs/recon-spec.md`](docs/recon-spec.md).
+Vuln classes: SQLi · reflected/DOM/stored XSS · access-control (IDOR + horizontal/vertical
+privesc) · path-traversal · SSRF · open-redirect · CRLF · CSRF · SSTI · RCE · NoSQL · XXE ·
+deserialization · file-upload · GraphQL · info-disclosure · WebSocket · request-smuggling.
+
+See [`docs/WORKFLOW.md`](docs/WORKFLOW.md) (plan of record), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
+and [`docs/recon-spec.md`](docs/recon-spec.md).
 
 ## Requirements
-- Python 3.11+
-- Docker (for the sandbox — real tool execution)
-- A local OpenAI-compatible LLM server (e.g. Ollama)
+- **Python 3.11+**
+- **Docker** — for the sandbox (real tool execution). On macOS, [colima](https://github.com/abiosoft/colima) works well.
+- **An OpenAI-compatible LLM endpoint** — local (Ollama / Jan / LM Studio / llama.cpp) or hosted.
 
-## Install
+## Full setup (from scratch)
 ```bash
-pip install -e .            # or:  pip install -e ".[dev]"  for tests/lint
-owlforge init               # writes ~/.owlforge/config.toml + the local DB
-owlforge sandbox build      # builds the owlforge-sandbox image (first build pulls base)
+# 1. get the code
+git clone https://github.com/saurabh-bhagat-stack/owlforge.git
+cd owlforge
+
+# 2. Python env + install
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .                 # add ".[dev]" for tests/lint
+
+# 3. initialize config + local DB  (writes ~/.owlforge/config.toml)
+owlforge init
+
+# 4. start Docker, then build the sandbox image (first build pulls the base + tools)
+colima start                     # macOS; or ensure Docker Desktop/daemon is running
+owlforge sandbox build
+owlforge sandbox status          # confirm: docker available + image built
 ```
 
 ## Configure
-Edit `~/.owlforge/config.toml` — point it at your model:
+Edit `~/.owlforge/config.toml` and point it at your model:
 ```toml
 [llm]
-base_url = "http://127.0.0.1:11434/v1"   # Ollama's OpenAI-compatible endpoint
+base_url = "http://127.0.0.1:11434/v1"   # e.g. Ollama's OpenAI-compatible endpoint
+api_key  = "ollama"                       # any non-empty string for local servers
 model    = "qwen3-14b:40k"               # a model your server actually serves
-context_window = 0                        # 0 = auto-detect the model's window
+context_window = 0                        # 0 = auto-detect (Ollama); set explicitly for llama.cpp
 ```
-> Ollama tip: a bare `hf.co/...` GGUF serves only ~4k context by default. Create a
-> Modelfile with `PARAMETER num_ctx <N>` (matching the model's real window) and
-> `ollama create`. owlforge auto-detects the served context.
+> **Ollama tip:** a bare `hf.co/...` GGUF serves only ~4k context by default. Create a
+> Modelfile with `PARAMETER num_ctx <N>` (matching the model's real trained window — don't
+> force it larger) and `ollama create`. owlforge auto-detects the served context.
+>
+> **llama.cpp / hosted tip:** auto-detect only works for Ollama — set `context_window`
+> explicitly to the server's context size.
 
-## Use
+## Run an assessment
 ```bash
-# unauthenticated assessment (single agent)
-owlforge run -m "Assess https://target.example for exploitable web vulns" -t https://target.example
+# default: multi-agent (recon → plan → specialists → validate → report)
+owlforge run -t https://target.example -m "Assess this app for exploitable web vulns"
 
-# multi-agent: recon -> plan -> specialist agents
-owlforge run --orchestrate -m "Assess the target" -t https://target.example
+# give it a project name to group runs
+owlforge run -t https://target.example --project acme -m "Full assessment"
 
-# authenticated (pick one)
+# single-agent instead of orchestrated
+owlforge run --single -t https://target.example -m "..."
+
+# SPA / JS-heavy app: interactive browser recon (auto-enables when a SPA is detected;
+# this forces it on)
+owlforge run --browser-recon -t https://app.example -m "..."
+
+# authenticated — pick one (or pass --identities for multi-role / privesc testing)
 owlforge run -t https://app.example --auth-cookie "session=..." -m "..."
 owlforge run -t https://app.example --auth-header "Authorization: Bearer ..." -m "..."
 owlforge run -t https://app.example --login-url https://app.example/login \
              --login-data "username=u&password=p" --login-success "Dashboard" -m "..."
+owlforge run -t https://app.example --identities identities.yaml -m "..."
 
-# optional active network recon (nmap) — off by default
-owlforge run --network-recon -m "..." -t https://target.example
+# scope control
+owlforge run -t https://app.example --scope api.example --out-of-scope "*/logout*" -m "..."
+owlforge run -t https://app.example --only xss,sqli -m "..."          # restrict classes
 
-owlforge assessments list              # past assessments
-owlforge assessments show <id>
-owlforge findings <id>
-owlforge report <id>                   # print the markdown report
-owlforge sandbox status                # docker + image state
+# extra signal sources (slower, opt-in)
+owlforge run -t https://target.example --nuclei -m "..."              # nuclei templates
+owlforge run -t https://target.example --deepen -m "..."              # read-only proof escalation
+owlforge run -t https://target.example --network-recon -m "..."       # nmap
 ```
+
+## Review results
+```bash
+owlforge assessments list          # past assessments
+owlforge assessments show <id>
+owlforge findings <id>             # findings for an assessment
+owlforge report <id>               # print the markdown report (--rebuild to regenerate)
+owlforge sandbox status            # docker + image state
+```
+
 Useful flags: `--model <id>` (override per run), `--max-turns N`, `--recon/--no-recon`,
-`--recon-pages N`, `--single` behaviour is the default (omit `--orchestrate`).
+`--recon-pages N`, `--no-sandbox` (host-only fallback). The report and findings are also
+written under the assessment's workspace directory.
 
 ## Honest limitations (today)
-- Local ≤27B models **confirm/validate reliably when guided to a parameter**, but
-  **autonomous discovery is still unreliable** — recon + the orchestrator narrow this gap.
-- **Access-control / IDOR** findings are not auto-validated (a single successful request
-  isn't proof) — they're kept as candidates pending differential testing.
-- JS-heavy SPAs whose links are fully dynamic may need **browser-driven recon** (planned).
+- Local ≤27B models **confirm/validate reliably**; fully-autonomous **discovery** is less
+  reliable than a frontier model — the deterministic recon + pre-probe + auto-file layer
+  is what makes weak models productive. Stronger model = broader coverage, same pipeline.
+- Request-smuggling is **detection-only** (low-confidence candidate; no exploitation).
+- Reports are **Markdown** today; HTML + SARIF/JSON export is planned.
+- Out of scope by design: non-web surfaces (thick-client/mobile/gRPC/SOAP), and any
+  destructive action — proof is always read-only (e.g. RCE proven with `id`/`hostname`).
 
 ## Development
 ```bash
