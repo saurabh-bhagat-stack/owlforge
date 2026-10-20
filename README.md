@@ -6,8 +6,7 @@ assessment — recon → understanding → authentication → planning → multi
 evidence-gated validation → report — with all tooling running inside an isolated sandbox
 container you build yourself.
 
-Original work — inspired by the best ideas across the field (Strix, XBOW, et al.) but its
-own architecture and engine.
+Original work — its own architecture and engine, built from the ground up.
 
 > ⚠️ **Status: active development.** The engine works end to end on real targets;
 > interfaces and schema still change. **Only test systems you are authorized to assess.**

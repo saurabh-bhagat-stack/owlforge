@@ -4,7 +4,7 @@ Phase 1 uses a cheap chars/4 token estimate (good enough for trimming decisions)
 a tiktoken-based estimate can drop in later behind ``estimate_tokens``.
 
 Two invariants the trimmer MUST preserve, learned from a live Qwen3-template crash:
-  1. Always keep the first user message (the task). Chat templates (Qwen3 et al.)
+  1. Always keep the first user message (the task). Some chat templates
      raise "No user query found in messages." if no plain user turn survives.
   2. Never leave an orphaned `tool` message at the front of the kept tail — a tool
      result whose assistant tool-call parent was trimmed away. OpenAI-compatible

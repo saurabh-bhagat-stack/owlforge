@@ -226,7 +226,7 @@ def build_registry(with_sandbox: bool = False) -> ToolRegistry:
         description=("File a vulnerability finding as a CANDIDATE. For auto-validation, PREFER a "
                      "structured repro: repro_url + repro_params (RAW payload values) + success_signal "
                      "(text present ONLY when vulnerable). owlforge re-issues it via http_request (no "
-                     "shell) and confirms the signal. repro_command is a legacy fallback."),
+                     "shell) and confirms the signal. repro_command is a deprecated fallback."),
         parameters={
             "type": "object",
             "properties": {

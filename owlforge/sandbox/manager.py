@@ -3,7 +3,7 @@
 Per-assessment, disposable container: bridge network, agentd port published to
 127.0.0.1 on a free host port, per-container bearer token, workspace volume mount,
 and a health gate before the session is handed back. Our entrypoint has no `set -e`
-trap, so we don't need the legacy's restart/liveness scaffolding.
+trap, so we don't need restart/liveness scaffolding.
 """
 
 from __future__ import annotations

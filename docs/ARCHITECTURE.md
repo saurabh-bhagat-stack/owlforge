@@ -1,243 +1,211 @@
 # owlforge — Architecture & Design
 
-> Status: **design locked, pre-scaffold.** This is the blueprint for the from-scratch
-> rebuild. The old Strix-port prototype lives in `owlforge-legacy` as a reference only.
+owlforge is a **local-first, model-agnostic, autonomous web-application penetration-testing
+platform**. You give it an authorized target and plain-language instructions; a model you
+choose drives recon → understanding → authentication → planning → multi-agent testing →
+evidence-gated validation → reporting, with all tooling running inside an isolated sandbox
+container and a full evidence trail persisted to SQLite.
 
-## 1. What owlforge is
+This document describes the system as built. The agreed engine/agent workflow and the
+milestone build order live in [`WORKFLOW.md`](WORKFLOW.md); the recon design in
+[`recon-spec.md`](recon-spec.md).
 
-A **local-first, autonomous, agentic penetration-testing platform**. You give it a
-project, a target, and plain-language mission instructions; a local LLM drives a team
-of agents that plan, execute real tools in an isolated sandbox, validate findings with
-reproducible proof, and produce a report — with a full evidence trail.
+## 1. Design principles
 
-**Original work.** We study the best ideas across the field (Strix's sandboxed
-tool execution, XBOW's autonomy, Shannon/XalgoriX's strengths) and re-express them as
-our own architecture. We do not fork or vendor their code.
-
-### Principles
-1. **Local-first.** Any OpenAI-compatible local model must work (Jan / Ollama /
-   LM Studio / llama.cpp). Hosted models are optional and only for benchmarking.
-2. **Isolation with rich comms.** Tools run in our own disposable container that the
-   engine talks to over a real, typed, streaming protocol — never stdout scraping.
-3. **Evidence-gated.** No finding is reported without a reproducible proof-of-concept.
-   Validation is a real re-test step, not an LLM assertion.
-4. **Auditable & resumable.** Every event, tool call, and artifact is persisted. A
-   mission can be inspected, replayed, and resumed.
-5. **Small, sharp, testable.** Each layer runs and is testable on its own — the engine
-   without the sandbox, the sandbox daemon without Docker, the CLI without a UI.
+1. **Local-first, model-agnostic.** Any OpenAI-compatible endpoint works (Ollama / Jan /
+   LM Studio / llama.cpp, or a hosted API). Designing for a modest local model forces a
+   robust harness — the deterministic recon, pre-probe, and evidence gate do the reliable
+   work — which then runs even better on a stronger model through the identical path.
+2. **Isolation with a typed contract.** Tools run in a disposable container the engine
+   talks to over a real, typed HTTP protocol — never stdout scraping.
+3. **Evidence-gated.** No finding is reported without a reproducible proof. Validation is a
+   real re-test step (re-issue the PoC, match the signal; XSS confirmed by browser
+   execution), not a model assertion.
+4. **Deterministic where it counts.** Crawling, surface enumeration, and per-class probing
+   are deterministic; the model spends its turns testing a mapped surface, not trying to
+   remember to enumerate.
+5. **Non-destructive.** Proof is read-only (e.g. RCE shown with `id`/`hostname`); nothing
+   mutating, no data exfiltration, no DoS.
+6. **Auditable & resumable.** Every event, tool call, attempt, and artifact is persisted;
+   working context lives in the store, not model memory.
+7. **Small, sharp, testable.** Each layer runs on its own — the engine without the sandbox,
+   the sandbox daemon without Docker, the CLI without a UI.
 
 ## 2. High-level architecture
 
 ```
 +---------------------------------------------------------------+
-|  owlforge engine  (Python, host process / daemon)             |
+|  owlforge engine  (Python, host process)                      |
 |                                                               |
-|   CLI --> Orchestrator --> Agent runtime(s) --> Tool registry |
-|                |                 |                   |         |
-|                |            LLM layer (LiteLLM)       |         |
-|                |       native-or-text tool-calling    |         |
-|                |       context mgmt . structured out   |        |
-|                v                                       v        |
-|          SQLite store                        Sandbox RPC client |
-|   (missions/agents/events/findings/report/memory)       |       |
-+---------------------------------------------------------- | ----+
-                                                            | HTTP + WS/SSE
-                                                            | 127.0.0.1:<port>, bearer token
-+---------------------------------------------------------- v ----+
-|  owlforge-sandbox  (our Docker image, disposable per mission)   |
-|                                                                 |
-|   owlforge-agentd (daemon)   mitmproxy (capture)   tool suite   |
-|     /exec (stream)            structured HTTP       nmap httpx   |
-|     /files  /proxy  /health   flow history          nuclei ffuf |
-|                                                     sqlmap curl  |
-|   /workspace/<missionId>  (mounted volume = evidence + artifacts)|
-+-----------------------------------------------------------------+
+|   CLI --> run_recon --> orchestrator --> specialist agents    |
+|              |              |                  |              |
+|              |         pre-probe (gates the model, auto-files)|
+|              |         LLM client (OpenAI-compatible)          |
+|              |         native-or-text tool-calling, ctx mgmt   |
+|              v                                  v              |
+|          SQLite store                   Sandbox RPC client     |
+|   (assessments/findings/surface/attempts/events/report)       |
++---------------------------------------------------------- | --+
+                                                            | HTTP, 127.0.0.1:<port>, bearer token
++---------------------------------------------------------- v --+
+|  owlforge-sandbox  (our Docker image, disposable per run)     |
+|                                                               |
+|   owlforge-agentd (FastAPI daemon)   mitmproxy (capture)      |
+|     /exec /http /file /proxy/flows   Playwright Chromium:      |
+|     /render /map /xss_check          /render /map /interact   |
+|     /interact /sso/* /ws_probe       tool suite: nmap httpx    |
+|     /smuggle_probe /health           nuclei ffuf katana wafw00f|
+|   /workspace  (mounted volume = evidence + artifacts)         |
++---------------------------------------------------------------+
 ```
 
 ## 3. Engine (Python)
 
-### 3.1 LLM layer — the local-first differentiator
-This is where the legacy code was weakest and where we win.
+### 3.1 LLM layer — the local-first core
+An `LLMClient` interface with a default OpenAI-compatible implementation (via the `openai`
+SDK) that covers every local and hosted server. It tries the server's **native**
+function-calling first and falls back to a **strict text tool-call protocol** (a documented
+JSON block + a robust balanced-brace parser) when native support is unreliable — common for
+local llama.cpp/Ollama. Reasoning/`<think>` content is stripped. Context is token-aware:
+per-tool-result caps, trimming that pins the system + first user message and fills the
+newest tail, and compaction of dropped turns — so long runs don't overflow a small window.
 
-- **Gateway:** an LLMClient interface with a default OpenAI-compatible impl (via the
-  `openai` SDK) that covers every local server. A LiteLLM-backed impl can drop in
-  behind the same interface later for hosted multi-provider use. [Implemented, Phase 1.]
-- **Tool-calling with fallback:** try the server's *native* function-calling first; if
-  the model/server doesn't support it reliably (common for local llama.cpp/Ollama),
-  fall back to a **strict text tool-call protocol** (a documented JSON block in the
-  prompt + a robust parser). The agent loop is identical either way.
-- **Structured output:** pydantic models + `instructor` for findings/reports/plans, so
-  we get typed objects, not hope-it's-valid JSON.
-- **Context management:** token-aware. Keep a rolling summary of old tool output,
-  hard-cap per-tool-result size, and trim the message history to fit the model's real
-  context window (configurable; local models are small). The legacy code grew messages
-  unbounded — a top cause of hangs/overflows.
-- **Resilience:** per-call timeout, bounded retries with backoff, streaming tokens for
-  live CLI output.
+### 3.2 Recon (deterministic)
+`run_recon` runs unauthenticated first, then auto-escalates to an authenticated pass when
+credentials are provided, discovered (leaked in JS/exposed files), or harvested from the
+login page. Each pass builds an attack-surface inventory: crawl + ffuf content-discovery +
+JS→API extraction + OpenAPI/GraphQL probes + fingerprint + WAF detection (wafw00f) + a
+deep JS-aware crawl (katana). For JS-heavy SPAs it adds **browser-driven interactive
+mapping** (`/map`): real Chromium navigates routes and clicks disclosure/nav controls while
+a request listener captures every XHR/fetch/websocket the app makes — recovering
+dynamically-built endpoints that never appear in the raw HTML. Non-destructive throughout.
 
-### 3.2 Orchestrator
-An async supervisor owning one mission end-to-end. Spawns and schedules agents as
-asyncio tasks, owns the `AgentGraph` (hierarchy + status), routes inter-agent messages
-over asyncio queues, enforces global budget (max turns / time / token spend), and drives
-the mission phases. **No "fire-and-forget promise in a web handler"** like the legacy —
-the engine is a real long-lived process (CLI foreground or a local daemon).
+### 3.3 Understanding & authentication
+A broad secret/PII scanner surfaces exposed credentials, keys, and tokens (kept in full as
+evidence). The identity/role manager supports multiple labelled sessions (unauth / user A /
+user B / low / admin) via cookie, header, form-login, or TOTP (RFC-6238, dependency-free).
+SSO/MFA is captured by a headed in-sandbox browser exposed over noVNC for a human-in-the-loop
+sign-in, whose storage state is then reused.
 
-### 3.3 Agent runtime
-The think -> act -> observe loop. A typed **tool registry**; each agent gets only the
-tools + skills its task needs. Per-agent scratchpad/notes/todos persisted to SQLite
-(not in-memory maps that die with the process). Agents finish by emitting a typed
-completion report back to the parent.
+### 3.4 Planning & pre-probe
+The orchestrator classifies every parameter and endpoint into vulnerability classes and
+builds a prioritized task list. A deterministic **pre-probe** tests each gateable class
+first; it **auto-files** findings it confirms itself, so recall never depends on the model
+remembering to file, and it skips classes with no signal so breadth doesn't inflate runtime.
 
-### 3.4 Tools
-Thin, typed wrappers. Two kinds:
-- **Sandbox tools** -> call `owlforge-agentd` over RPC: `exec_command` (streamed),
-  file read/write, proxy control, HTTP history query.
-- **Engine-local tools:** `spawn_agent`, `send_message`, `create_finding`,
-  `web_search` (pluggable provider — NOT z.ai), `finish`.
+### 3.5 Specialist agents
+Each task is handled by a focused per-class agent (SQLi, XSS, SSRF, path-traversal, SSTI,
+RCE, access-control, …) with a think→act→observe loop and only the tools and playbook its
+task needs. When a signal is confirmed but an agent gives up, an enforced bypass loop
+re-prompts once with concrete evasion techniques, informed by the attempt ledger.
 
-### 3.5 Knowledge / skills
-Port the legacy **skills catalog** (IDOR, SQLi, SSRF, XSS, JWT, CSRF, business-logic +
-tool playbooks for httpx/katana/sqlmap/nuclei/ffuf/nmap/semgrep + framework/cloud notes)
-as **data (YAML)** that feeds prompts. This is the most reusable asset in the old repo —
-we keep the *content*, reimplement the *plumbing*.
+### 3.6 Validation, dedupe, chaining, report
+Validation re-issues each candidate's structured PoC and promotes it only if the success
+signal reproduces; XSS is confirmed by actual browser execution; access-control by
+differential testing across identities. Findings are deduped; an exploit-chain pass
+correlates already-validated components into higher-impact narratives (credentialed
+access → IDOR/privilege escalation; SSRF → cloud instance metadata) — described, never
+further exploited. Reports render to Markdown, HTML, and SARIF 2.1.0 (CWE/OWASP-tagged).
 
-### 3.6 Memory
-Project-level memory (scope, creds, tech stack, prior findings, confirmed false
-positives, payloads that worked) that is **written back after each mission** so the tool
-gets smarter over time. The legacy read memory into prompts but never updated it.
+### 3.7 Knowledge / playbooks
+Per-class methodology and tool invocations as **data** (`owlforge/knowledge/playbooks/*.yaml`)
+rendered into the relevant agent's prompt.
 
-### 3.7 Persistence
-**SQLite** (via SQLModel) — one embedded, transactional store for missions, agents,
-events, tool calls, findings, reports, artifacts, and project memory. Replaces *both*
-the legacy JSON-file store (raced under concurrency) and the vestigial Prisma demo
-models. Evidence blobs live on disk under the mission workspace; the DB holds metadata +
-pointers.
+### 3.8 Persistence
+One embedded, transactional **SQLite** store (via SQLModel) for assessments, surface items,
+findings, attempts, events, and reports. Evidence blobs live on disk under the assessment
+workspace; the DB holds metadata and pointers. Schema upgrades are additive.
 
 ## 4. Sandbox
 
 ### 4.1 Image (`owlforge-sandbox`)
-Our own, built by us. Slim multi-stage build on a Debian/Kali base, pinned tool
-versions, containing only: the wired tool suite, `mitmproxy`, and `owlforge-agentd`.
-Entry point launches mitmproxy + the daemon and stays up — **no `set -e` death trap**
-(the single biggest legacy failure). Target size: a fraction of Strix's 10.7 GB.
+A slim multi-stage build on a Debian base with pinned tool versions: the recon/test tool
+suite (nmap, httpx, nuclei, ffuf, katana, wafw00f), `mitmproxy`, Playwright Chromium, a
+noVNC stack for interactive sign-in, and `owlforge-agentd`. The entry point launches the
+capture proxy and the daemon and stays up (no `set -e`). Agentd code is copied last so
+editing it rebuilds in seconds.
 
 ### 4.2 `owlforge-agentd` (in-container daemon)
-A small Python service (FastAPI + uvicorn). The engine treats the sandbox as a
-**service with a typed contract**, not a shell. Sketch:
+A small FastAPI service. The engine treats the sandbox as a **service with a typed
+contract**, not a shell:
 
-| Method | Purpose |
+| Endpoint | Purpose |
 |---|---|
-| `POST /exec` -> handle | start a command; returns an id |
-| `GET  /exec/{id}/stream` (SSE/WS) | live stdout/stderr |
-| `GET  /exec/{id}` | final result: exit code, captured output, timing |
-| `POST /processes` / `DELETE /processes/{id}` | long-running / interactive tools (listeners, crawlers) |
-| `GET/PUT /files/{path}` | evidence in/out |
-| `GET  /proxy/flows` | structured HTTP request/response history (from mitmproxy) |
-| `POST /proxy/scope` | set capture/scope rules |
-| `GET  /health` | readiness gate before a mission starts |
+| `GET /health` | readiness gate before a run starts |
+| `POST /exec` | run a command; exit code, captured output, timing |
+| `POST /http` | structured HTTP request (no shell quoting) |
+| `GET /file` | read evidence from the workspace |
+| `GET /proxy/flows` | structured HTTP history from mitmproxy |
+| `POST /render` | headless-Chromium render (runs JS, returns the DOM) |
+| `POST /map` | interactive SPA crawl: navigate + click, capture XHR/fetch/WS |
+| `POST /xss_check` | confirm XSS by real browser execution |
+| `POST /interact` | fill + submit for formless/stored XSS |
+| `POST /sso/start` · `POST /sso/finish` | headed-browser SSO/MFA capture over noVNC |
+| `POST /ws_probe` | WebSocket connect/send/receive |
+| `POST /smuggle_probe` | time-based request-smuggling detection |
 
-- **Transport:** container publishes the daemon port on `127.0.0.1:<port>` (bridge +
-  `-p`). Engine talks to it over HTTP + a WS/SSE stream.
-- **Auth:** engine generates a per-mission bearer token, injects it as a container env
-  var; the daemon requires it. Keeps a random local port from being hijacked.
-- **Testable without Docker:** the daemon runs on localhost in dev so the engine and
-  tools can be exercised with no container at all.
+- **Transport:** the container publishes the daemon port on `127.0.0.1:<port>`; the engine
+  talks to it over HTTP.
+- **Auth:** the engine generates a per-run bearer token and injects it as a container env
+  var; the daemon requires it, so a random local port can't be hijacked.
+- **Testable without Docker:** the daemon runs on localhost in dev, so the engine and tools
+  can be exercised with no container.
 
-### 4.3 Capture — mitmproxy, not Caido
-mitmproxy is Python-native and scriptable (addon API) — the daemon exposes its captured
-flows as structured data the engine/agents can query, diff, and replay. Cleaner and more
-original than the legacy's bundled-Caido + GraphQL-guest-login approach.
+### 4.3 Capture
+`mitmproxy` is Python-native and scriptable; the daemon exposes its captured flows as
+structured data the engine and agents can query, diff, and replay.
 
-### 4.4 Isolation & scope enforcement (differentiator)
-Bridge network; an **egress allowlist derived from the mission scope** enforced at the
-network layer inside the sandbox — so an out-of-scope request is blocked by the
-environment, not just discouraged by the prompt. Workspace is a per-mission volume the
-engine can read evidence from directly.
+### 4.4 Scope enforcement
+A scope resolver (primary host + the app's own API/SSO hosts, with `--scope` / `--out-of-scope`
+/ `--only`) gates every request and the orchestrator's class/target selection, so
+out-of-scope traffic is blocked rather than merely discouraged.
 
-## 5. CLI (first interface)
+## 5. CLI
 
 ```
-owlforge run --project acme --target https://app.example.com \
-             --mode standard -m "test auth + IDOR, creds in project memory"
-owlforge missions [list|show <id>|resume <id>]
-owlforge findings <mission-id>
-owlforge report  <mission-id> [--md|--html]
-owlforge sandbox [build|up|down|shell|logs]
+owlforge init
+owlforge sandbox build | status
+owlforge run --target https://app.example --project acme -m "full assessment" \
+             [--browser-recon] [--identities ids.yaml] [--scope h] [--only xss,sqli] \
+             [--nuclei] [--deepen] [--single]
+owlforge assessments list | show <id>
+owlforge findings <id>
+owlforge report  <id> [--format md|html|sarif|all] [--rebuild]
 ```
-Config at `~/.owlforge/config.toml` (LLM base URL/model, sandbox image/tag, budgets).
+Config lives at `~/.owlforge/config.toml` (LLM base URL / model, sandbox image, budgets).
 `run` streams the live event feed to the terminal.
 
-## 6. Mission lifecycle
-
-`recon -> plan -> execute (agents) -> validate -> report`
-
-- **recon:** fingerprint target, seed the sitemap/scope.
-- **plan:** orchestrator decomposes into parallelizable agent tasks.
-- **execute:** specialized agents run tools, capture evidence, file *candidate* findings.
-- **validate:** each candidate is **re-tested** with a clean PoC; only reproducible ones
-  are promoted. (Evidence-gated — borrowed from the djinn philosophy.)
-- **report:** executive summary + per-finding technical detail, PoC, impact, remediation,
-  and the raw evidence.
-
-## 7. Repository layout (planned)
+## 6. Repository layout
 
 ```
 owlforge/
-  pyproject.toml            # engine package (owlforge)
+  pyproject.toml
   owlforge/
-    cli.py                  # entry point
-    config.py
-    llm/                    # LiteLLM gateway, tool-calling, context mgmt
-    engine/                 # orchestrator, agent runtime, agent graph, bus
-    tools/                  # tool registry (sandbox + engine-local)
-    sandbox/                # RPC client, lifecycle (build/up/down)
-    knowledge/              # skills + playbooks (YAML) + loaders
-    store/                  # SQLite models + repositories
-    report/                 # report rendering
-  sandbox/                  # the image we build
-    Dockerfile
-    agentd/                 # owlforge-agentd daemon source
-    entrypoint.sh
-  ui/                       # (later) thin dashboard over the engine's event stream
-  docs/
-    ARCHITECTURE.md         # this file
+    cli.py  config.py
+    llm/            # OpenAI-compatible client, tool-calling, context mgmt
+    engine/         # recon, orchestrator, agents, pre-probe, validate, chains, ...
+    tools/          # tool registry (sandbox + engine-local)
+    sandbox/        # RPC client, container lifecycle
+    knowledge/      # playbooks (YAML) + loader
+    store/          # SQLite models
+    report/         # markdown / HTML / SARIF rendering
+    bench/          # model-compatibility benchmarking (dev)
+  sandbox/          # the image we build (Dockerfile, agentd/, entrypoint.sh, wordlists/)
+  docs/             # ARCHITECTURE.md, WORKFLOW.md, recon-spec.md
   tests/
-  .github/workflows/        # CI: lint/test + build & push image to GHCR
+  .github/workflows/  # CI: lint + test; build & push image to GHCR
 ```
 
-## 8. Build / CI / registry
+## 7. Build / CI / registry
 
-- **Registry:** GHCR (`ghcr.io/saurabh-bhagat-stack/owlforge-sandbox`). Private, free,
-  co-located with the repo; CI authenticates with GitHub's built-in token (no secrets to
-  manage). Docker Hub mirror can be added to the same workflow later for public pulls.
-- **CI:** GitHub Actions — lint (ruff) + type-check (mypy/pyright) + tests (pytest) on
-  every push; build & push the multi-arch sandbox image on version tags (buildx in CI
-  covers the arm64+amd64 that local Docker can't).
-- **Local dev:** `owlforge sandbox build` for a quick single-arch (arm64) image on the
-  M4; CI owns the published multi-arch builds.
+- **Registry:** GHCR (`ghcr.io/saurabh-bhagat-stack/owlforge-sandbox`); CI authenticates
+  with GitHub's built-in token.
+- **CI:** GitHub Actions — ruff + pytest on every push; multi-arch image build on version
+  tags (buildx covers arm64 + amd64).
+- **Local dev:** `owlforge sandbox build` for a single-arch image; CI owns the published
+  multi-arch builds.
 
-## 9. Phased roadmap
+## 8. Testing
 
-- **Phase 0 — scaffold.** Repo layout, `pyproject`, CLI skeleton (`owlforge --help`),
-  config loader, SQLite models, CI (lint/test). Runnable, does nothing useful yet.
-- **Phase 1 — the loop.** LLM layer (LiteLLM + tool-calling fallback + context mgmt) +
-  one mock tool + a single agent. Prove the think->act->observe loop against a real local
-  model, no sandbox.
-- **Phase 2 — the sandbox.** Build `owlforge-sandbox` + `owlforge-agentd`; wire
-  `exec_command` over RPC; single agent does real recon (httpx/nmap/curl) against a lab
-  target.
-- **Phase 3 — findings.** Full tool suite + mitmproxy capture + typed findings + report +
-  evidence-gated validation.
-- **Phase 4 — the team.** Multi-agent orchestration: spawn, coordinate, message, and
-  validation agents.
-- **Phase 5 — UI.** Thin dashboard over the engine's event stream.
-
-**Testing grounds:** deliberately vulnerable web apps (e.g. ginandjuice.shop,
-burpbountylab, local DVWA/Juice Shop) for the web/app-pentest flow.
-
-## 10. What we take from `owlforge-legacy`
-
-Keep (as content/specs, reimplemented clean): the **skills catalog**, the **system-prompt
-structure**, the **finding/report schema**, and the **tool set** we decide to wire.
-Drop: the Next.js-as-engine model, JSON-file store, Prisma demo models, z.ai SDK
-dependency, bundled Caido, and the `set -e` entrypoint. Everything else is new.
+Each layer is unit-tested; the full pipeline is validated against deliberately vulnerable
+web apps that the operator is authorized to assess (targets are supplied at test time).
