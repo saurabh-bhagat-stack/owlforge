@@ -84,7 +84,8 @@ def _render(target, mode, risk, sev, validated, candidates, rejected) -> str:
         lines += ["", "## Candidates (need manual validation)"]
         for f in candidates:
             note = f" — _{f.validation_note}_" if f.validation_note else ""
-            lines.append(f"- **[{f.severity}] {f.title}**{note}")
+            ep = f" `{f.endpoint}`" if f.endpoint else ""
+            lines.append(f"- **[{f.severity}] {f.title}**{ep}{note}")
 
     return "\n".join(lines) + "\n"
 

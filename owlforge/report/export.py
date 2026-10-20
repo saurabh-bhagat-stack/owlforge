@@ -199,6 +199,7 @@ def to_html(assessment_id: str) -> tuple[str, str | None]:
     cand_rows = "".join(
         f'<li><span class="badge sm" style="background:{_SEV_COLOR.get(d["severity"], "#5a6b7b")}">'
         f'{_esc(d["severity"].upper())}</span> {_esc(d["title"])}'
+        + (f' <code>{_esc(d["endpoint"])}</code>' if d["endpoint"] else "")
         + (f' — <em>{_esc(d["note"])}</em>' if d["note"] else "") + "</li>"
         for d in candidates
     )
