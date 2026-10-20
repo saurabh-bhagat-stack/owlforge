@@ -101,36 +101,28 @@ context_window = 0                        # 0 = auto-detect (Ollama); set explic
 > explicitly to the server's context size.
 
 ## Run an assessment
+The command is one argument. It runs **deep by default** — recon, interactive SPA
+mapping, pre-probe, specialists, validation, and reporting, all automatic.
 ```bash
-# default: multi-agent (recon → plan → specialists → validate → report)
-owlforge run -t https://target.example -m "Assess this app for exploitable web vulns"
-
-# give it a project name to group runs
-owlforge run -t https://target.example --project acme -m "Full assessment"
-
-# single-agent instead of orchestrated
-owlforge run --single -t https://target.example -m "..."
-
-# SPA / JS-heavy app: interactive browser recon (auto-enables when a SPA is detected;
-# this forces it on)
-owlforge run --browser-recon -t https://app.example -m "..."
-
-# authenticated — pick one (or pass --identities for multi-role / privesc testing)
-owlforge run -t https://app.example --auth-cookie "session=..." -m "..."
-owlforge run -t https://app.example --auth-header "Authorization: Bearer ..." -m "..."
-owlforge run -t https://app.example --login-url https://app.example/login \
-             --login-data "username=u&password=p" --login-success "Dashboard" -m "..."
-owlforge run -t https://app.example --identities identities.yaml -m "..."
-
-# scope control
-owlforge run -t https://app.example --scope api.example --out-of-scope "*/logout*" -m "..."
-owlforge run -t https://app.example --only xss,sqli -m "..."          # restrict classes
-
-# extra signal sources (slower, opt-in)
-owlforge run -t https://target.example --nuclei -m "..."              # nuclei templates
-owlforge run -t https://target.example --deepen -m "..."              # read-only proof escalation
-owlforge run -t https://target.example --network-recon -m "..."       # nmap
+owlforge run ginandjuice.shop          # bare host is fine; https is assumed
 ```
+Add `-m` only to steer it — scope, credentials, focus areas, constraints. This is the
+operator's highest-priority guidance and it reaches the specialists:
+```bash
+owlforge run app.example -m "In scope: app.example + api.example. Out of scope: */billing/*.
+Creds: user alice/pass123 (role=user), admin bob/pass456 (role=admin). Focus on IDOR and
+SSRF in the order/checkout flow. Rate-limit: max 5 req/s."
+```
+Optional knobs (each earns its place):
+```bash
+owlforge run app.example --identities roles.yaml   # structured multi-role creds (IDOR/privesc)
+owlforge run app.example --scope api.example --out-of-scope "*/logout*"   # enforced scope boundary
+owlforge run app.example --model saluki-27b:latest # override the configured model for this run
+owlforge run app.example --network-recon           # also nmap (opt-in: broader authorization)
+```
+Each run gets an auto project name `<host>-<hash>`, so repeat scans of the same domain
+stay separate. A project name derives automatically — there's no `--project` to set, and
+no "quick/standard" mode: owlforge is always thorough.
 
 ## Review results
 ```bash
@@ -142,9 +134,9 @@ owlforge report <id> --format html # also HTML + SARIF; md|html|sarif|all
 owlforge sandbox status            # docker + image state
 ```
 
-Useful flags: `--model <id>` (override per run), `--max-turns N`, `--recon/--no-recon`,
-`--recon-pages N`, `--no-sandbox` (host-only fallback). The report and findings are also
-written under the assessment's workspace directory.
+The report and findings are also written under the assessment's workspace directory
+(`~/.owlforge/assessments/<id>/`). The sandbox (Docker) is required; if it isn't running,
+owlforge tells you to start it rather than silently running a weaker host-only scan.
 
 ## Honest limitations (today)
 - Local ≤27B models **confirm/validate reliably**; fully-autonomous **discovery** is less

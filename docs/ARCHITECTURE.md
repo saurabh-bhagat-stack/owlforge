@@ -165,9 +165,9 @@ out-of-scope traffic is blocked rather than merely discouraged.
 ```
 owlforge init
 owlforge sandbox build | status
-owlforge run --target https://app.example --project acme -m "full assessment" \
-             [--browser-recon] [--identities ids.yaml] [--scope h] [--only xss,sqli] \
-             [--nuclei] [--deepen] [--single]
+owlforge run app.example [-m "scope / creds / focus / constraints"] \
+             [--identities roles.yaml] [--scope h] [--out-of-scope g] \
+             [--model id] [--network-recon]
 owlforge assessments list | show <id>
 owlforge findings <id>
 owlforge report  <id> [--format md|html|sarif|all] [--rebuild]

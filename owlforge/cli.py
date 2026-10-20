@@ -19,7 +19,6 @@ from owlforge.config import (
     owlforge_home,
     write_default_config,
 )
-from owlforge.engine.agent import run_single_agent
 from owlforge.engine.events import Emitter
 from owlforge.engine.validate import validate_findings
 from owlforge.llm.client import LLMError, make_client
@@ -27,7 +26,6 @@ from owlforge.report.builder import build_and_save_report
 from owlforge.sandbox import manager
 from owlforge.store.db import init_db, session
 from owlforge.store.models import Assessment, Finding, Report
-from owlforge.tools.builtin import build_registry
 
 app = typer.Typer(
     add_completion=False,
@@ -71,50 +69,52 @@ def init() -> None:
 
 @app.command()
 def run(
-    target: str = typer.Option(None, "--target", "-t", help="Target URL/host (defaults to testing target)."),
-    project: str = typer.Option("default", "--project", "-p", help="Project name."),
-    mode: str = typer.Option("standard", "--mode", help="quick | standard | deep"),
-    message: str = typer.Option(..., "--message", "-m", help="Plain-language assessment instructions."),
-    max_turns: int = typer.Option(20, "--max-turns", help="Max agent turns."),
-    model: str = typer.Option(None, "--model", help="Override the configured model id (e.g. saluki-27b:latest)."),
-    no_sandbox: bool = typer.Option(False, "--no-sandbox", help="Skip the sandbox even if configured."),
-    auth_cookie: str = typer.Option(None, "--auth-cookie", help="Cookie for authenticated recon, e.g. 'session=abc'."),
-    auth_header: str = typer.Option(None, "--auth-header", help="Extra header 'Name: Value'."),
-    login_url: str = typer.Option(None, "--login-url", help="Form-login URL (authenticated mode)."),
-    login_data: str = typer.Option(None, "--login-data", help="urlencoded login fields, e.g. 'username=a&password=b'."),
-    login_success: str = typer.Option(None, "--login-success", help="Substring indicating a successful login."),
-    recon: bool = typer.Option(True, "--recon/--no-recon", help="Deterministic recon before testing."),
-    recon_pages: int = typer.Option(25, "--recon-pages", help="Max pages to crawl during recon."),
-    network_recon: bool = typer.Option(False, "--network-recon", help="Also run port/service discovery (nmap)."),
-    browser_recon: bool = typer.Option(False, "--browser-recon", help="Headless-Chromium render (SPA recon)."),
-    nuclei: bool = typer.Option(False, "--nuclei", help="Run nuclei (full templates) as a signal source — slower."),
-    deepen: bool = typer.Option(False, "--deepen", help="Escalate validated findings to read-only proof (slower)."),
-    orchestrate: bool = typer.Option(True, "--orchestrate/--single", help="Multi-agent default (--single = one agent)"),
-    scope_in: list[str] = typer.Option(None, "--scope", help="Extra in-scope host or host/path glob (repeatable)."),  # noqa: B008
-    scope_out: list[str] = typer.Option(None, "--out-of-scope", help="Out-of-scope host/path glob (repeatable; wins)."),  # noqa: B008
-    only: str = typer.Option(None, "--only", help="Restrict to vuln classes, comma-separated (e.g. xss,sqli)."),
+    target: str = typer.Argument(
+        ..., help="Target URL or host (e.g. example.com or https://app.example.com)."),
+    message: str = typer.Option(
+        "", "--message", "-m",
+        help="Optional operator instructions (highest priority): scope, credentials, "
+             "in/out-of-scope areas, focus vulns, rate limits, priorities. Free text."),
+    scope_in: list[str] = typer.Option(  # noqa: B008
+        None, "--scope", help="Extra in-scope host or host/path glob (repeatable; enforced)."),
+    scope_out: list[str] = typer.Option(  # noqa: B008
+        None, "--out-of-scope", help="Out-of-scope host/path glob (repeatable; wins)."),
     identities: str = typer.Option(
-        None, "--identities", help="YAML file of role-labelled identities (multi-session / privesc)."),
+        None, "--identities",
+        help="YAML of role-labelled credentials for multi-role / privilege-escalation testing."),
+    model: str = typer.Option(
+        None, "--model", help="Override the configured model id for this run."),
+    network_recon: bool = typer.Option(
+        False, "--network-recon",
+        help="Also run port/service discovery (nmap) — opt-in (broader authorization)."),
 ) -> None:
-    """Start an assessment and run the single-agent loop, with the sandbox if available."""
+    """Run a deep assessment against TARGET. Thorough by default — recon, interactive SPA
+    mapping, pre-probe, specialists, validation, and reporting all run automatically."""
     import asyncio
+    import hashlib as _hashlib
+    import time as _time
+    from urllib.parse import urlparse
 
     cfg = load_config()
     if model:
         cfg = cfg.model_copy(deep=True)
         cfg.llm.model = model
-    target = target or cfg.testing.default_target
-    # --mode shapes assessment depth. Extras (browser-recon/nuclei/deepen) are additive,
-    # so passing the explicit flag still turns them on regardless of mode.
-    if mode == "deep":
-        browser_recon = True
-        nuclei = True
-        deepen = True
-        recon_pages = max(recon_pages, 40)
-    elif mode == "quick":
-        recon_pages = min(recon_pages, 10)
-        max_turns = min(max_turns, 10)
+    # normalise the target: accept a bare host, default to https
+    target = (target or cfg.testing.default_target or "").strip()
+    if target and "://" not in target:
+        target = "https://" + target
+    if not target:
+        console.print("[red]No target. Usage: owlforge run <target>[/]")
+        raise typer.Exit(1)
     init_db()
+
+    # deep-by-default: everything thorough, no knobs to dumb it down
+    recon_pages = 40
+    max_turns = 24
+
+    # auto project name: <host>-<shorthash> so repeat scans of a domain segregate
+    host = urlparse(target).netloc or target
+    project = f"{host}-{_hashlib.sha1(f'{target}{_time.time()}'.encode()).hexdigest()[:4]}"
 
     try:
         client = make_client(cfg)
@@ -122,96 +122,67 @@ def run(
         console.print(f"[red]{e}[/]")
         console.print(
             f"[dim]Edit {config_path()} and set a model your local server at "
-            f"{cfg.llm.base_url} actually serves, then re-run.[/]"
-        )
+            f"{cfg.llm.base_url} actually serves, then re-run.[/]")
         raise typer.Exit(1) from None
 
     aid = _new_id("asmt")
     with session() as s:
-        s.add(
-            Assessment(
-                id=aid, project_name=project, target=target,
-                instructions=message, scan_mode=mode, status="executing",
-            )
-        )
+        s.add(Assessment(id=aid, project_name=project, target=target,
+                         instructions=message, scan_mode="deep", status="executing"))
         s.commit()
 
+    # the sandbox is REQUIRED — a host-only run misses nmap/ffuf/nuclei/katana/Playwright/agentd
     sblog = lambda m: console.print(rf"[dim]\[sandbox] {m}[/]")  # noqa: E731
-    sandbox_session = None
-    sandbox_client = None
-    if cfg.sandbox.enabled and not no_sandbox:
-        if not manager.docker_available():
-            console.print("[yellow]Docker not available — running without the sandbox (exec_command disabled).[/]")
-        elif not manager.image_exists(cfg.sandbox.image):
-            console.print(
-                f"[yellow]Sandbox image not built ({cfg.sandbox.image}). Run "
-                f"'owlforge sandbox build'. Running without exec_command for now.[/]"
-            )
-        else:
-            try:
-                sandbox_session = manager.start(
-                    cfg.sandbox.image, workspace=str(assessments_dir() / aid), log=sblog
-                )
-                sandbox_client = sandbox_session.client
-            except Exception as e:
-                console.print(f"[red]sandbox start failed:[/] {e}")
-                console.print("[yellow]running without exec_command[/]")
+    if not cfg.sandbox.enabled:
+        console.print("[red]Sandbox is disabled in config ([sandbox] enabled=false). "
+                      "owlforge needs it for real testing — enable it and re-run.[/]")
+        raise typer.Exit(1)
+    if not manager.docker_available():
+        console.print("[red]Docker isn't running. Start it (e.g. `colima start` or Docker "
+                      "Desktop) and re-run — owlforge runs its tools in a sandbox container.[/]")
+        raise typer.Exit(1)
+    if not manager.image_exists(cfg.sandbox.image):
+        console.print(f"[red]Sandbox image not built ({cfg.sandbox.image}). Run "
+                      "`owlforge sandbox build` first.[/]")
+        raise typer.Exit(1)
+    try:
+        sandbox_session = manager.start(
+            cfg.sandbox.image, workspace=str(assessments_dir() / aid), log=sblog)
+        sandbox_client = sandbox_session.client
+    except Exception as e:
+        console.print(f"[red]sandbox start failed:[/] {e}")
+        raise typer.Exit(1) from None
 
-    # --- unified recon + auth pipeline: unauth first, auto-escalate to auth ---
-    from urllib.parse import parse_qsl
+    # --- auth: identities file (structured) + login-page harvest; creds may also be in -m ---
+    from owlforge.engine.auth import AuthContext
 
-    from owlforge.engine.auth import AuthContext, establish_session
-
-    _extra: dict[str, str] = {}
-    if auth_header and ":" in auth_header:
-        _hk, _hv = auth_header.split(":", 1)
-        _extra[_hk.strip()] = _hv.strip()
-    if auth_cookie:
-        _extra["Cookie"] = auth_cookie
-    if login_url:
-        user_auth = AuthContext(mode="login", headers=_extra, login_url=login_url,
-                                login_params=dict(parse_qsl(login_data or "")), login_success=login_success)
-    elif _extra:
-        user_auth = AuthContext(mode="session", headers=_extra)
-    else:
-        user_auth = AuthContext(mode="unauth")
-
+    user_auth = AuthContext(mode="unauth")
+    identity_set = None
     if identities:
         from owlforge.engine.identities import establish_all, load_identities, primary_identity
 
         def _estab_reqfn(method, url, headers=None, params=None, body=None):
-            if sandbox_client is not None:
-                try:
-                    return sandbox_client.http_request(method, url, headers=headers, params=params, body=body)
-                except Exception as e:
-                    return {"error": str(e)}
-            import httpx
             try:
-                r = httpx.request(method, url, headers=headers, params=params, content=body,
-                                  follow_redirects=False, timeout=20.0)
-                return {"status": r.status_code, "headers": dict(r.headers), "body": r.text}
+                return sandbox_client.http_request(method, url, headers=headers,
+                                                   params=params, body=body)
             except Exception as e:
                 return {"error": str(e)}
 
         try:
             _idents = establish_all(load_identities(identities), _estab_reqfn,
                                     log=lambda m: console.print(rf"[dim]\[identities] {m}[/]"))
-            # interactive SSO/MFA capture for any 'sso' identity (sandbox browser + noVNC)
             _sso_idents = [i for i in _idents if i.needs_sso]
-            if _sso_idents and sandbox_client is not None and sandbox_session is not None:
+            if _sso_idents and sandbox_session is not None:
                 from owlforge.engine.authbroker import capture_sso_session, storage_state_to_cookie
                 for ident in _sso_idents:
-                    login_url = ident.auth.get("url") or target
+                    _login_url = ident.auth.get("url") or target
                     ppath = str(assessments_dir() / aid / f"sso_{ident.label}.json")
                     state = capture_sso_session(
-                        sandbox_client, sandbox_session.novnc_url, login_url,
+                        sandbox_client, sandbox_session.novnc_url, _login_url,
                         persist_path=ppath, prompt_fn=console.input,
                         log=lambda m: console.print(m))
                     ident.session_headers = storage_state_to_cookie(state, target)
                     ident.established = bool(ident.session_headers)
-            elif _sso_idents:
-                console.print("[yellow]SSO identities need the sandbox; none active — skipped.[/]")
-
             _prim = primary_identity(_idents)
             _ok = sum(1 for i in _idents if i.session_headers)
             _pending = [i.label for i in _idents if i.needs_sso and not i.session_headers]
@@ -224,9 +195,8 @@ def run(
         except Exception as e:
             console.print(f"[yellow]identities load failed: {e}[/]")
 
-    auth_intent = ("operator login" if user_auth.mode == "login"
-                   else "operator session" if user_auth.mode == "session"
-                   else "unauth -> auto-escalate if creds found")
+    from owlforge.engine.scope import build_scope
+    scope = build_scope(target, scope=scope_in, out_of_scope=scope_out, only=None)
 
     panel = [
         f"id:      [bold cyan]{aid}[/]",
@@ -234,73 +204,42 @@ def run(
         f"target:  {target}",
         f"model:   {cfg.llm.model} @ {cfg.llm.base_url}",
         f"context: {client.context_window} ({client.context_source})",
-        f"sandbox: {'on' if sandbox_client else 'off'}",
-        f"auth:    {auth_intent}",
-        f"mode:    {mode}",
+        "sandbox: on",
+        f"auth:    {'operator identities' if identity_set else 'unauth -> auto-escalate (login-page harvest)'}",
+        "depth:   deep (recon + SPA map + pre-probe + specialists + validate + report)",
     ]
     console.print(Panel.fit(chr(10).join(panel), title="assessment started", border_style="cyan"))
 
-    identity_set = None
-    from owlforge.engine.scope import build_scope
-    scope = build_scope(target, scope=scope_in, out_of_scope=scope_out,
-                        only=(only.split(",") if only else None))
-
-    surface_text = ""
-    session_headers: dict[str, str] = {}
-    auth_summary = ""
-    if recon:
-        from owlforge.engine.recon import run_recon
+    # --- recon (always): unauth -> auto-escalate to auth, interactive SPA map, nuclei ---
+    from owlforge.engine.recon import nuclei_scan, run_recon
+    surface_text, session_headers, auth_summary = "", {}, ""
+    try:
+        surface_text, session_headers, auth_summary = run_recon(
+            aid, target, sandbox_client, user_auth=user_auth, max_pages=recon_pages,
+            network_recon_enabled=network_recon, browser_recon_enabled=True,
+            scope=scope, log=lambda m: console.print(rf"[dim]\[recon] {m}[/]"))
+        console.print(rf"[dim]\[auth] {auth_summary}[/]")
         try:
-            surface_text, session_headers, auth_summary = run_recon(
-                aid, target, sandbox_client, user_auth=user_auth, max_pages=recon_pages,
-                network_recon_enabled=network_recon, browser_recon_enabled=browser_recon,
-                scope=scope, log=lambda m: console.print(rf"[dim]\[recon] {m}[/]"))
-            console.print(rf"[dim]\[auth] {auth_summary}[/]")
-            if nuclei:
-                from owlforge.engine.recon import nuclei_scan
-                try:
-                    nuclei_scan(aid, target, sandbox_client,
-                                log=lambda m: console.print(rf"[dim]\[nuclei] {m}[/]"))
-                except Exception as e:
-                    console.print(f"[yellow]nuclei failed: {e}[/]")
-            if surface_text:
-                console.print(f"[dim]\\[recon] surface inventory:\n{surface_text[:700]}[/]")
+            nuclei_scan(aid, target, sandbox_client,
+                        log=lambda m: console.print(rf"[dim]\[nuclei] {m}[/]"))
         except Exception as e:
-            console.print(f"[yellow]recon failed: {e}[/]")
-    elif user_auth.mode != "unauth":
-        # recon disabled, but still honor operator credentials for the hunt
-        def _reqfn(method, url, headers=None, params=None, body=None):
-            import httpx
-            try:
-                r = httpx.request(method, url, headers=headers, params=params, content=body,
-                                  follow_redirects=False, timeout=20.0)
-                return {"status": r.status_code, "headers": dict(r.headers), "body": r.text}
-            except Exception as e:
-                return {"error": str(e)}
-        session_headers = establish_session(
-            user_auth, _reqfn, log=lambda m: console.print(rf"[dim]\[auth] {m}[/]"))
+            console.print(f"[yellow]nuclei failed: {e}[/]")
+        if surface_text:
+            console.print(f"[dim]\\[recon] surface inventory:\n{surface_text[:700]}[/]")
+    except Exception as e:
+        console.print(f"[yellow]recon failed: {e}[/]")
+
     emit = Emitter(aid, console=console)
-    registry = build_registry(with_sandbox=sandbox_client is not None)
     status = "completed"
     summary = ""
     report_path = None
     try:
-        if orchestrate:
-            from owlforge.engine.orchestrator import run_orchestrated
-            summary = asyncio.run(run_orchestrated(
-                assessment_id=aid, client=client, sandbox=sandbox_client, emit=emit,
-                session_headers=session_headers, scan_mode=mode, target=target,
-                max_turns=max(6, max_turns // 2), scope=scope,
-            ))
-        else:
-            summary = asyncio.run(
-                run_single_agent(
-                    client=client, registry=registry, emit=emit, assessment_id=aid,
-                    target=target, instructions=message, scan_mode=mode, max_turns=max_turns,
-                    sandbox=sandbox_client, session_headers=session_headers,
-                    surface=surface_text or None,
-                )
-            )
+        from owlforge.engine.orchestrator import run_orchestrated
+        summary = asyncio.run(run_orchestrated(
+            assessment_id=aid, client=client, sandbox=sandbox_client, emit=emit,
+            session_headers=session_headers, scan_mode="deep", target=target,
+            max_turns=max(6, max_turns // 2), scope=scope, operator_message=message,
+        ))
         try:
             from owlforge.engine.orchestrator import read_blackboard
             from owlforge.engine.stored import stored_scan
@@ -319,7 +258,7 @@ def run(
         emit("status", "validation phase")
         vcounts = asyncio.run(validate_findings(assessment_id=aid, sandbox=sandbox_client, emit=emit,
                                                 session_headers=session_headers, identities=identity_set))
-        if deepen and vcounts.get("validated", 0) > 0:
+        if vcounts.get("validated", 0) > 0:
             from owlforge.engine.deepen import deepen_findings
             try:
                 asyncio.run(deepen_findings(assessment_id=aid, client=client, sandbox=sandbox_client,

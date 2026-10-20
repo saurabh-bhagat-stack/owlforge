@@ -195,6 +195,7 @@ async def run_orchestrated(
     max_turns: int = 10,
     scope=None,
     max_rounds: int = 2,
+    operator_message: str = "",
 ) -> str:
     registry = build_registry(with_sandbox=sandbox is not None)
     done_keys: set = set()
@@ -246,8 +247,11 @@ async def run_orchestrated(
             emit("status", f"[specialist:{cls}] testing {len(targets)} target(s) (highest-interest first)")
             hint = ("\n\nPre-probe ALREADY observed these signals — confirm and exploit them first:\n- "
                     + "\n- ".join(probe_notes[:8])) if probe_notes else ""
+            op = (("OPERATOR INSTRUCTIONS (highest priority — honor scope, credentials, focus, and "
+                   f"constraints):\n{operator_message.strip()}\n\n") if operator_message.strip() else "")
             instr = (
-                f"You are a {_TITLE[cls]} specialist. Test ONLY for {_TITLE[cls]} on the targets below — "
+                op
+                + f"You are a {_TITLE[cls]} specialist. Test ONLY for {_TITLE[cls]} on the targets below — "
                 f"nothing else. Signal of success: {_HINT[cls]}. Use http_request (put RAW payloads in "
                 f"params; do not url-encode); you may also use exec_command (curl, ffuf, nuclei, the sandbox "
                 f"toolkit) when a request is filtered. Test each target's parameter. The moment you CONFIRM "
