@@ -134,7 +134,8 @@ owlforge run -t https://target.example --network-recon -m "..."       # nmap
 owlforge assessments list          # past assessments
 owlforge assessments show <id>
 owlforge findings <id>             # findings for an assessment
-owlforge report <id>               # print the markdown report (--rebuild to regenerate)
+owlforge report <id>               # markdown report (--rebuild to regenerate)
+owlforge report <id> --format html # also HTML + SARIF; md|html|sarif|all
 owlforge sandbox status            # docker + image state
 ```
 
@@ -147,7 +148,7 @@ written under the assessment's workspace directory.
   reliable than a frontier model — the deterministic recon + pre-probe + auto-file layer
   is what makes weak models productive. Stronger model = broader coverage, same pipeline.
 - Request-smuggling is **detection-only** (low-confidence candidate; no exploitation).
-- Reports are **Markdown** today; HTML + SARIF/JSON export is planned.
+- Reports export to **Markdown, HTML, and SARIF 2.1.0** (CWE/OWASP-tagged for CI).
 - Out of scope by design: non-web surfaces (thick-client/mobile/gRPC/SOAP), and any
   destructive action — proof is always read-only (e.g. RCE proven with `id`/`hostname`).
 
