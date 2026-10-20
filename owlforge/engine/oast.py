@@ -73,7 +73,8 @@ class OastSession:
             f"command -v interactsh-client >/dev/null 2>&1 || {{ echo __NO_INTERACTSH__; exit 0; }}; "
             f"nohup interactsh-client -server {shlex.quote(server)}{tok} -json -o {_OUT} "
             f"-ps -psf {_PAYLOAD} -pi 1 -duc -nf >/dev/null 2>&1 & "
-            f"sleep 5; cat {_PAYLOAD} 2>/dev/null"
+            f"for i in $(seq 1 14); do [ -s {_PAYLOAD} ] && break; sleep 1; done; "
+            f"cat {_PAYLOAD} 2>/dev/null"
         )
         try:
             out = _ok(self.sandbox.exec(cmd, timeout_ms=25_000))
@@ -103,15 +104,17 @@ class OastSession:
             tunnel_cmd = (f"command -v ngrok >/dev/null 2>&1 || {{ echo __NO_TUNNEL__; exit 0; }}; "
                           f"nohup ngrok http {port} --authtoken {shlex.quote(ngrok_tok)} "
                           f"--log stdout --log-format logfmt >/workspace/tun.out 2>&1 & "
-                          f"sleep 9; grep -oE 'url=https://[a-z0-9.\\-]+' /workspace/tun.out | "
-                          f"head -1 | cut -d= -f2")
+                          f"for i in $(seq 1 18); do grep -qE 'url=https://' /workspace/tun.out 2>/dev/null "
+                          f"&& break; sleep 1; done; "
+                          f"grep -oE 'url=https://[a-z0-9.\\-]+' /workspace/tun.out | head -1 | cut -d= -f2")
             name = "ngrok tunnel"
         else:
             tunnel_cmd = (f"command -v cloudflared >/dev/null 2>&1 || {{ echo __NO_TUNNEL__; exit 0; }}; "
                           f"nohup cloudflared tunnel --url http://127.0.0.1:{port} --no-autoupdate "
                           f">/workspace/tun.out 2>&1 & "
-                          f"sleep 10; grep -oE 'https://[a-z0-9-]+\\.trycloudflare\\.com' "
-                          f"/workspace/tun.out | head -1")
+                          f"for i in $(seq 1 22); do grep -qE 'https://[a-z0-9-]+\\.trycloudflare\\.com' "
+                          f"/workspace/tun.out 2>/dev/null && break; sleep 1; done; "
+                          f"grep -oE 'https://[a-z0-9-]+\\.trycloudflare\\.com' /workspace/tun.out | head -1")
             name = "cloudflare tunnel"
         cmd = (
             f"pkill -f oast_listener 2>/dev/null; pkill -f 'cloudflared tunnel' 2>/dev/null; "
