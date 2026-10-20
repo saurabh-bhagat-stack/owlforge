@@ -47,14 +47,16 @@ class TestingConfig(BaseModel):
 class OastConfig(BaseModel):
     """Out-of-band application security testing (blind SSRF/XXE/RCE/SQLi callbacks).
 
-    Resolution order when enabled: a bring-your-own self-hosted interactsh / collaborator
-    (`collaborator_url` [+ `token`]) is tried FIRST; else the public interactsh servers in
-    `server`; else owlforge flags affected findings as "potentially vulnerable — needs
-    manual verification (no OAST reachable)" rather than dropping them."""
+    Resolution order when enabled: (1) public interactsh `server`; (2) a cloudflared (or
+    ngrok) tunnel to an in-sandbox listener; (3) a bring-your-own collaborator
+    (`collaborator_url` [+ `token`], a self-hosted interactsh); else owlforge flags
+    affected sinks "needs manual verification" and tells you to configure one."""
     enabled: bool = True
     collaborator_url: str = ""  # BYO self-hosted interactsh / collaborator domain (tried first)
     token: str = ""             # auth token for a protected self-hosted server
-    server: str = "oast.pro,oast.live,oast.site,oast.online,oast.fun,oast.me"  # public fallback
+    server: str = "oast.pro,oast.live,oast.site,oast.online,oast.fun,oast.me"  # public interactsh
+    tunnel: bool = True         # if interactsh is blocked, expose a sandbox listener via cloudflared
+    ngrok_token: str = ""       # optional: use ngrok instead of cloudflared (needs an authtoken)
     wait_seconds: int = 12      # how long to wait for callbacks after injecting
 
 
@@ -113,13 +115,15 @@ max_budget_usd = 0.0
 reasoning_effort = "medium"
 
 [oast]
-# Out-of-band testing for blind SSRF/XXE/RCE/SQLi. BYO self-hosted interactsh/collaborator
-# is tried first, else the public servers; if neither is reachable, affected findings are
-# flagged "needs manual verification" instead of being dropped.
+# Out-of-band testing for blind SSRF/XXE. Order: public interactsh -> cloudflared/ngrok
+# tunnel -> your configured collaborator_url. If all are blocked, affected sinks are
+# flagged "needs manual verification" and owlforge tells you to set collaborator_url here.
 enabled = true
 collaborator_url = ""   # e.g. your self-hosted interactsh domain (tried first)
 token = ""              # auth token for a protected self-hosted server
 server = "oast.pro,oast.live,oast.site,oast.online,oast.fun,oast.me"
+tunnel = true           # if interactsh is blocked, tunnel a sandbox listener via cloudflared
+ngrok_token = ""        # optional: use ngrok instead of cloudflared (needs an authtoken)
 wait_seconds = 12
 
 [testing]

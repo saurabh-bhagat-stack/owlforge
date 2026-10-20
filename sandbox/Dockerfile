@@ -38,6 +38,8 @@ RUN set -u; ARCH="$(dpkg --print-architecture)"; cd /tmp; \
         && unzip -o katana.zip katana -d /usr/local/bin && chmod +x /usr/local/bin/katana ) || echo "WARN: katana install failed"; \
     ( curl -fsSL -o interactsh.zip "https://github.com/projectdiscovery/interactsh/releases/download/v${INTERACTSH_VERSION}/interactsh-client_${INTERACTSH_VERSION}_linux_${ARCH}.zip" \
         && unzip -o interactsh.zip interactsh-client -d /usr/local/bin && chmod +x /usr/local/bin/interactsh-client ) || echo "WARN: interactsh-client install failed"; \
+    ( curl -fsSL -o /usr/local/bin/cloudflared "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-${ARCH}" \
+        && chmod +x /usr/local/bin/cloudflared ) || echo "WARN: cloudflared install failed"; \
     rm -f /tmp/*.zip /tmp/*.tgz
 
 # mitmproxy (own venv — heavy deps kept out of the agentd venv).
