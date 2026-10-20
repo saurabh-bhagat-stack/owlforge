@@ -92,10 +92,11 @@ async def validate_findings(
             )
         ).all()
         items = [(f.id, f.repro_command, f.success_signal, f.title,
-                  f.repro_method, f.repro_url, dict(f.repro_params or {}), f.repro_body) for f in rows]
+                  f.repro_method, f.repro_url, dict(f.repro_params or {}), f.repro_body,
+                  f.repro_content_type) for f in rows]
 
     counts = {"validated": 0, "rejected": 0, "manual": 0}
-    for fid, repro, signal, title, rmethod, rurl, rparams, rbody in items:
+    for fid, repro, signal, title, rmethod, rurl, rparams, rbody, rct in items:
         if _needs_differential(title):
             verdict, note = None, ""
             if sandbox is not None and rurl.strip():
@@ -150,8 +151,10 @@ async def validate_findings(
             if rurl.strip():
                 from owlforge.tools.builtin import _normalize_params
                 params = _normalize_params(rparams) if rparams else None
+                hdrs = {"Content-Type": rct} if rct else None
                 d = await asyncio.to_thread(
-                    sandbox.http_request, rmethod or "GET", rurl, params=params, body=(rbody or None)
+                    sandbox.http_request, rmethod or "GET", rurl, params=params,
+                    body=(rbody or None), headers=hdrs
                 )
                 out = f"{d.get('status', '')}\n{d.get('headers', '')}\n{d.get('body', '') or ''}".lower()
             else:

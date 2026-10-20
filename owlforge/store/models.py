@@ -82,6 +82,7 @@ class Finding(SQLModel, table=True):
     repro_url: str = ""
     repro_params: dict = Field(default_factory=dict, sa_column=Column(JSON))
     repro_body: str = ""
+    repro_content_type: str = ""       # content-type for repro_body (e.g. form / xml / json)
     success_signal: str = ""
     validation_note: str = ""
     filed_by_agent_id: str | None = None

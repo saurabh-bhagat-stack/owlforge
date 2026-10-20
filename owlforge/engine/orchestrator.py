@@ -157,6 +157,21 @@ def _targets_text(targets: list[dict], limit: int = 30) -> str:
     return "\n".join(lines)
 
 
+def _repro_location(repro: dict) -> dict:
+    """Map a probe repro to the Finding's repro fields: a body payload (POST/PUT/XML/JSON)
+    goes to repro_body + repro_content_type; a query payload goes to repro_params."""
+    if repro.get("where") == "body":
+        ct = repro.get("content_type", "application/x-www-form-urlencoded")
+        if "xml" in ct or "json" in ct:
+            body = repro["payload"]
+        else:
+            from urllib.parse import urlencode
+            body = urlencode({repro["param"]: repro["payload"]})
+        return {"repro_params": {}, "repro_body": body, "repro_content_type": ct}
+    return {"repro_params": {repro["param"]: repro["payload"]}, "repro_body": "",
+            "repro_content_type": ""}
+
+
 def _autofile_probe_finding(assessment_id: str, repro: dict) -> None:
     """Deterministically file a finding the pre-probe already CONFIRMED, so recall never
     depends on the LLM remembering to call create_finding. Validation re-tests it."""
@@ -177,7 +192,7 @@ def _autofile_probe_finding(assessment_id: str, repro: dict) -> None:
             impact="See the vulnerability class description.",
             remediation="Validate/encode/parameterize the affected input per its class.",
             repro_url=repro["url"], repro_method=repro.get("method", "GET"),
-            repro_params={repro["param"]: repro["payload"]}, success_signal=repro["success_signal"],
+            **_repro_location(repro), success_signal=repro["success_signal"],
             status="candidate", confidence="high",
             validation_note="deterministic pre-probe (auto-filed)"))
         s.commit()
