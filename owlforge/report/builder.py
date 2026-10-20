@@ -52,6 +52,13 @@ def build_and_save_report(assessment_id: str) -> tuple[str, str | None]:
         path = str(fp)
     except Exception:
         pass
+    # also emit HTML + SARIF (best-effort; never break the run)
+    try:
+        from owlforge.report.export import to_html, to_sarif
+        to_html(assessment_id)
+        to_sarif(assessment_id)
+    except Exception:
+        pass
     return md, path
 
 

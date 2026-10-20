@@ -405,22 +405,32 @@ def findings(assessment_id: str) -> None:
 def report(
     assessment_id: str,
     rebuild: bool = typer.Option(False, "--rebuild", help="Rebuild from current findings."),
+    fmt: str = typer.Option("md", "--format", "-f",
+                            help="Output format: md | html | sarif | all."),
 ) -> None:
-    """Print the assessment report (markdown)."""
+    """Print or write the assessment report (markdown / HTML / SARIF)."""
     init_db()
-    if rebuild:
-        md, path = build_and_save_report(assessment_id)
+    fmt = (fmt or "md").lower()
+    build = rebuild or fmt != "md"
+    if build:
+        md, _ = build_and_save_report(assessment_id)  # emits md + html + sarif
+    else:
+        with session() as s:
+            rep = s.get(Report, assessment_id)
+        if not rep or not rep.body_markdown:
+            console.print("[yellow]No report yet. Run the assessment, or use --rebuild.[/]")
+            raise typer.Exit(1)
+        md = rep.body_markdown
+    if fmt in ("md", "all"):
         console.print(md)
-        if path:
-            console.print(f"[dim]written: {path}[/]")
-        return
-    with session() as s:
-        rep = s.get(Report, assessment_id)
-    if not rep or not rep.body_markdown:
-        console.print("[yellow]No report yet. Run the assessment, or use --rebuild.[/]")
-        raise typer.Exit(1)
-    console.print(rep.body_markdown)
-
+    from owlforge.config import assessments_dir
+    d = assessments_dir() / assessment_id
+    names = {"html": ["report.html"], "sarif": ["report.sarif.json"],
+             "all": ["report.md", "report.html", "report.sarif.json"]}.get(fmt, [])
+    for name in names:
+        fp = d / name
+        if fp.exists():
+            console.print(f"[dim]written: {fp}[/]")
 
 @sandbox_app.command("build")
 def sandbox_build() -> None:
