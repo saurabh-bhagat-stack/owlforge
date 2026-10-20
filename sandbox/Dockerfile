@@ -26,6 +26,7 @@ ARG HTTPX_VERSION=1.6.9
 ARG NUCLEI_VERSION=3.3.9
 ARG FFUF_VERSION=2.1.0
 ARG KATANA_VERSION=1.1.0
+ARG INTERACTSH_VERSION=1.2.4
 RUN set -u; ARCH="$(dpkg --print-architecture)"; cd /tmp; \
     ( curl -fsSL -o httpx.zip "https://github.com/projectdiscovery/httpx/releases/download/v${HTTPX_VERSION}/httpx_${HTTPX_VERSION}_linux_${ARCH}.zip" \
         && unzip -o httpx.zip httpx -d /usr/local/bin && chmod +x /usr/local/bin/httpx ) || echo "WARN: httpx install failed"; \
@@ -35,6 +36,8 @@ RUN set -u; ARCH="$(dpkg --print-architecture)"; cd /tmp; \
         && tar -xzf ffuf.tgz -C /usr/local/bin ffuf && chmod +x /usr/local/bin/ffuf ) || echo "WARN: ffuf install failed"; \
     ( curl -fsSL -o katana.zip "https://github.com/projectdiscovery/katana/releases/download/v${KATANA_VERSION}/katana_${KATANA_VERSION}_linux_${ARCH}.zip" \
         && unzip -o katana.zip katana -d /usr/local/bin && chmod +x /usr/local/bin/katana ) || echo "WARN: katana install failed"; \
+    ( curl -fsSL -o interactsh.zip "https://github.com/projectdiscovery/interactsh/releases/download/v${INTERACTSH_VERSION}/interactsh-client_${INTERACTSH_VERSION}_linux_${ARCH}.zip" \
+        && unzip -o interactsh.zip interactsh-client -d /usr/local/bin && chmod +x /usr/local/bin/interactsh-client ) || echo "WARN: interactsh-client install failed"; \
     rm -f /tmp/*.zip /tmp/*.tgz
 
 # mitmproxy (own venv — heavy deps kept out of the agentd venv).

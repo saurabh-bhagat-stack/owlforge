@@ -44,11 +44,26 @@ class TestingConfig(BaseModel):
     default_target: str = ""  # operator supplies the target with --target
 
 
+class OastConfig(BaseModel):
+    """Out-of-band application security testing (blind SSRF/XXE/RCE/SQLi callbacks).
+
+    Resolution order when enabled: a bring-your-own self-hosted interactsh / collaborator
+    (`collaborator_url` [+ `token`]) is tried FIRST; else the public interactsh servers in
+    `server`; else owlforge flags affected findings as "potentially vulnerable — needs
+    manual verification (no OAST reachable)" rather than dropping them."""
+    enabled: bool = True
+    collaborator_url: str = ""  # BYO self-hosted interactsh / collaborator domain (tried first)
+    token: str = ""             # auth token for a protected self-hosted server
+    server: str = "oast.pro,oast.live,oast.site,oast.online,oast.fun,oast.me"  # public fallback
+    wait_seconds: int = 12      # how long to wait for callbacks after injecting
+
+
 class Config(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     runner: RunnerConfig = Field(default_factory=RunnerConfig)
     testing: TestingConfig = Field(default_factory=TestingConfig)
+    oast: OastConfig = Field(default_factory=OastConfig)
 
 
 def owlforge_home() -> Path:
@@ -96,6 +111,16 @@ agentd_port = 47130
 max_turns = 40
 max_budget_usd = 0.0
 reasoning_effort = "medium"
+
+[oast]
+# Out-of-band testing for blind SSRF/XXE/RCE/SQLi. BYO self-hosted interactsh/collaborator
+# is tried first, else the public servers; if neither is reachable, affected findings are
+# flagged "needs manual verification" instead of being dropped.
+enabled = true
+collaborator_url = ""   # e.g. your self-hosted interactsh domain (tried first)
+token = ""              # auth token for a protected self-hosted server
+server = "oast.pro,oast.live,oast.site,oast.online,oast.fun,oast.me"
+wait_seconds = 12
 
 [testing]
 default_target = ""  # set your authorized target, or pass --target
