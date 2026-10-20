@@ -237,6 +237,7 @@ def run(
 
     surface_text = ""
     session_headers: dict[str, str] = {}
+    auth_summary = ""
     if recon:
         from owlforge.engine.recon import run_recon
         try:
@@ -319,6 +320,11 @@ def run(
                        f"{vcounts['rejected']} rejected, {vcounts['manual']} manual")
         from owlforge.engine.validate import dedupe_findings
         dedupe_findings(aid, emit)
+        try:
+            from owlforge.engine.chains import correlate_chains
+            correlate_chains(aid, auth_summary=auth_summary, emit=emit)
+        except Exception as e:
+            emit("log", f"chain correlation failed: {type(e).__name__}: {e}")
         emit("status", "reporting phase")
         _md, report_path = build_and_save_report(aid)
     except KeyboardInterrupt:

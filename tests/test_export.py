@@ -12,7 +12,9 @@ def _seed(tmp_path, monkeypatch):
     db.init_db()
     from owlforge.store.models import Assessment, Finding
     with db.session() as s:
-        s.add(Assessment(id="asmt_x", project_name="p", target="https://t.example", instructions="assess", scan_mode="orchestrate"))
+        s.add(Assessment(id="asmt_x", project_name="p",
+                         target="https://t.example", instructions="assess",
+                         scan_mode="orchestrate"))
         s.add(Finding(id="f1", assessment_id="asmt_x",
                       title="SQL injection (error-based) in 'category'",
                       severity="high", status="validated", confidence="high",
