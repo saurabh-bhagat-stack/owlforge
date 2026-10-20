@@ -25,8 +25,9 @@ SETUP → RECON → UNDERSTAND → AUTH → PLAN → HUNT → VALIDATE → DEEPE
          unauth    PII/JS→API)  escal-  ator +      ist        gate)       read-only
          first)                 ate)    PRE-PROBE)  agents)                proof)
 ```
-- **Recon is deterministic.** A crawler + ffuf content-discovery + JS/param extraction +
-  fingerprint map the surface. For JS-heavy SPAs it adds **browser-driven interactive
+- **Recon is deterministic.** A crawler + ffuf content-discovery + katana (JS-aware
+  crawl) + JS/param extraction + fingerprint + wafw00f (WAF/CDN detection) map the
+  surface. For JS-heavy SPAs it adds **browser-driven interactive
   recon** (real Chromium navigates routes, clicks menus/tabs, and captures every
   XHR/fetch/websocket the app makes) so dynamically-built API endpoints that never appear
   in the raw HTML are discovered too — non-destructively (it never submits forms).
@@ -47,6 +48,9 @@ SETUP → RECON → UNDERSTAND → AUTH → PLAN → HUNT → VALIDATE → DEEPE
   as proof.
 - **Found secrets, keys, and PII are reported IN FULL** as evidence — owlforge does not
   redact what it proves.
+- **Exploit chaining.** After validation, owlforge correlates already-validated findings
+  into higher-impact attack paths (credentialed access → IDOR/privilege escalation;
+  SSRF → cloud instance metadata) — described, never further exploited.
 
 Vuln classes: SQLi · reflected/DOM/stored XSS · access-control (IDOR + horizontal/vertical
 privesc) · path-traversal · SSRF · open-redirect · CRLF · CSRF · SSTI · RCE · NoSQL · XXE ·
