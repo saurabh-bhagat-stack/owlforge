@@ -322,6 +322,7 @@ def _collect_surface(
     max_pages: int = 25,
     browser_recon_enabled: bool = False,
     extra_seeds: list[str] | None = None,
+    deep_tools: bool = True,
     log: Callable[[str], None] = lambda m: None,
 ) -> tuple[list[dict], str]:
     """Build (but DO NOT persist) the surface inventory for one pass, plus a
@@ -349,6 +350,8 @@ def _collect_surface(
         except Exception:
             pass
     inv += content_discovery(target, sandbox_client, session_headers, log=log)
+    if deep_tools:
+        inv += katana_crawl(target, sandbox_client, session_headers=session_headers, log=log)
     inv += js_recon(target, request_fn, log=log)
     inv += api_spec_discovery(target, request_fn, log=log)
     inv += graphql_probe(target, request_fn, log=log)
@@ -365,6 +368,9 @@ def _collect_surface(
 
     fp = fingerprint(target, request_fn)
     header = f"Fingerprint: server={fp.get('server') or '?'}; tech={', '.join(fp.get('tech') or []) or '?'}"
+    waf = waf_detect(target, sandbox_client, log=log) if deep_tools else ""
+    if waf:
+        header += f"; waf={waf}"
     return inv, header
 
 
@@ -603,7 +609,7 @@ def run_recon(
         auth_inv, _ = _collect_surface(
             assessment_id, target, session_headers, sandbox_client,
             max_pages=max_pages, browser_recon_enabled=browser_recon_enabled,
-            extra_seeds=_seeds, log=log)
+            extra_seeds=_seeds, log=log, deep_tools=False)
         for it in auth_inv:
             key = (it["method"], it["url"], tuple(sorted(it["params"])))
             if key not in unauth_keys:
@@ -687,6 +693,83 @@ def content_discovery(
                     "params": [], "source": "content-discovery", "status": res.get("status")})
     log(f"content discovery: {len(out)} hidden path(s)")
     return out
+
+
+def katana_crawl(
+    target: str,
+    sandbox_client,
+    session_headers: dict | None = None,
+    depth: int = 2,
+    time_s: int = 90,
+    log: Callable[[str], None] = lambda m: None,
+) -> list[dict]:
+    """Deep JS-aware crawl with katana (in-sandbox). Complements the static crawler and
+    the interactive map: katana parses JS/HTML, follows links, and surfaces endpoints the
+    regex crawler misses. Same-origin, bounded depth + wall-clock. Carries auth. Read-only
+    (GET crawl). Best-effort: empty list if katana isn't installed or errors."""
+    if sandbox_client is None:
+        return []
+    base = target.rstrip("/")
+    hdr = "".join(f" -H '{k}: {v}'" for k, v in (session_headers or {}).items())
+    cmd = (
+        f"katana -u {base} -silent -jsonl -jc -d {int(depth)} -c 10 -ct {int(time_s)} "
+        f"-fs fqdn{hdr} 2>/dev/null"
+    )
+    try:
+        r = sandbox_client.exec(cmd, timeout_ms=(time_s + 30) * 1000)
+    except Exception as e:
+        log(f"katana error: {e}")
+        return []
+    import json as _json
+    origin = _origin(target)
+    out: list[dict] = []
+    for line in (r.stdout or "").splitlines():
+        line = line.strip()
+        if not line or not line.startswith("{"):
+            continue
+        try:
+            rec = _json.loads(line)
+        except Exception:
+            continue
+        req = rec.get("request", {}) if isinstance(rec, dict) else {}
+        url = req.get("endpoint") or rec.get("endpoint") or ""
+        if not url or _origin(url) != origin:
+            continue
+        method = (req.get("method") or "GET").upper()
+        params = sorted(parse_qs(urlparse(url).query).keys())
+        out.append({"url": _strip(url), "method": method, "params": params,
+                    "source": "katana"})
+    out = _dedup(out)
+    log(f"katana: {len(out)} endpoint(s)")
+    return out
+
+
+def waf_detect(target: str, sandbox_client, log: Callable[[str], None] = lambda m: None) -> str:
+    """Detect a WAF/CDN in front of the target with wafw00f (in-sandbox). Returns a short
+    label for the fingerprint header (and informs the bypass loop). '' if none/unavailable."""
+    if sandbox_client is None:
+        return ""
+    cmd = (f"wafw00f {target} -f json -o /workspace/waf.json >/dev/null 2>&1; "
+           "cat /workspace/waf.json 2>/dev/null")
+    try:
+        r = sandbox_client.exec(cmd, timeout_ms=60_000)
+        import json as _json
+        data = _json.loads(r.stdout or "[]")
+    except Exception as e:
+        log(f"wafw00f error: {e}")
+        return ""
+    if isinstance(data, dict):
+        data = [data]
+    names: list[str] = []
+    for d in data or []:
+        if d.get("detected") and d.get("firewall") and d["firewall"].lower() != "none":
+            fw = d["firewall"]
+            man = d.get("manufacturer") or ""
+            names.append(f"{fw}" + (f" ({man})" if man and man != fw else ""))
+    if names:
+        log(f"waf: {', '.join(names)}")
+        return ", ".join(dict.fromkeys(names))
+    return ""
 
 
 def network_recon(target: str, sandbox_client, log: Callable[[str], None] = lambda m: None) -> str:

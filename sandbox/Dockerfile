@@ -25,6 +25,7 @@ RUN apt-get update \
 ARG HTTPX_VERSION=1.6.9
 ARG NUCLEI_VERSION=3.3.9
 ARG FFUF_VERSION=2.1.0
+ARG KATANA_VERSION=1.1.0
 RUN set -u; ARCH="$(dpkg --print-architecture)"; cd /tmp; \
     ( curl -fsSL -o httpx.zip "https://github.com/projectdiscovery/httpx/releases/download/v${HTTPX_VERSION}/httpx_${HTTPX_VERSION}_linux_${ARCH}.zip" \
         && unzip -o httpx.zip httpx -d /usr/local/bin && chmod +x /usr/local/bin/httpx ) || echo "WARN: httpx install failed"; \
@@ -32,11 +33,18 @@ RUN set -u; ARCH="$(dpkg --print-architecture)"; cd /tmp; \
         && unzip -o nuclei.zip nuclei -d /usr/local/bin && chmod +x /usr/local/bin/nuclei ) || echo "WARN: nuclei install failed"; \
     ( curl -fsSL -o ffuf.tgz "https://github.com/ffuf/ffuf/releases/download/v${FFUF_VERSION}/ffuf_${FFUF_VERSION}_linux_${ARCH}.tar.gz" \
         && tar -xzf ffuf.tgz -C /usr/local/bin ffuf && chmod +x /usr/local/bin/ffuf ) || echo "WARN: ffuf install failed"; \
+    ( curl -fsSL -o katana.zip "https://github.com/projectdiscovery/katana/releases/download/v${KATANA_VERSION}/katana_${KATANA_VERSION}_linux_${ARCH}.zip" \
+        && unzip -o katana.zip katana -d /usr/local/bin && chmod +x /usr/local/bin/katana ) || echo "WARN: katana install failed"; \
     rm -f /tmp/*.zip /tmp/*.tgz
 
 # mitmproxy (own venv — heavy deps kept out of the agentd venv).
 RUN python3 -m venv /opt/owlforge/mitm-venv \
     && /opt/owlforge/mitm-venv/bin/pip install "mitmproxy>=11,<13"
+
+# wafw00f (WAF fingerprinting) in its own venv, symlinked onto PATH.
+RUN python3 -m venv /opt/owlforge/recon-venv \
+    && /opt/owlforge/recon-venv/bin/pip install wafw00f \
+    && ln -sf /opt/owlforge/recon-venv/bin/wafw00f /usr/local/bin/wafw00f
 
 # owlforge-agentd venv + Chromium + nuclei templates FIRST (heavy, rarely change),
 # then the agentd code LAST so editing it rebuilds in seconds (no chromium re-download).
