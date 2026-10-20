@@ -104,6 +104,16 @@ def run(
         cfg = cfg.model_copy(deep=True)
         cfg.llm.model = model
     target = target or cfg.testing.default_target
+    # --mode shapes assessment depth. Extras (browser-recon/nuclei/deepen) are additive,
+    # so passing the explicit flag still turns them on regardless of mode.
+    if mode == "deep":
+        browser_recon = True
+        nuclei = True
+        deepen = True
+        recon_pages = max(recon_pages, 40)
+    elif mode == "quick":
+        recon_pages = min(recon_pages, 10)
+        max_turns = min(max_turns, 10)
     init_db()
 
     try:
