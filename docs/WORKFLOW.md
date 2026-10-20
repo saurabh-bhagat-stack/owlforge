@@ -153,8 +153,13 @@ Mapping, not coverage.
 - **M8 — WebSocket + Blazor/SignalR adapters.** Transport adapters so specialists run
   over WS and Blazor Server circuits; Blazor WASM assembly/boot.json → backend API.
 - **M9 — Exploit-chaining + conditional.** Explicit cross-finding chaining
-  (creds→auth→IDOR, SSRF→metadata→RCE); subdomain/vhost enum (only if scope spans
-  hosts); business-logic abuse (best-effort — only partially automatable).
+  (creds→auth→IDOR, SSRF→metadata→RCE) — **DONE** (engine/chains.py, non-destructive
+  correlation of validated components). Remaining (best-effort): subdomain/vhost enum
+  (only if scope spans hosts); business-logic abuse (only partially automatable).
+
+Beyond the milestones, also shipped: **browser-driven interactive SPA recon**
+(agentd /map — drives Chromium through SPAs, captures XHR/fetch/websocket + forms),
+**katana + wafw00f** recon tools, and **HTML + SARIF 2.1.0 report export** (CWE/OWASP).
 
 Each milestone: built compute-light, unit-tested locally against known-vuln oracles
 (ginandjuice + mcp-vuln-lab + Juice Shop/DVWA + others supplied at test time), with GLM
