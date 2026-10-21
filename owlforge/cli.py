@@ -85,12 +85,20 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
     import asyncio
     summary = ""
     report_path = None
+    _examined: set[str] = set()
+
+    async def _validate_cb():
+        # confirm a specialist's findings the moment it finishes, so they surface live
+        await validate_findings(assessment_id=aid, sandbox=sandbox_client, emit=emit,
+                                session_headers=session_headers, identities=identity_set,
+                                skip_ids=_examined)
+
     from owlforge.engine.orchestrator import run_orchestrated
     summary = asyncio.run(run_orchestrated(
         assessment_id=aid, client=client, sandbox=sandbox_client, emit=emit,
         session_headers=session_headers, scan_mode="deep", target=target,
         max_turns=max(6, max_turns // 2), scope=scope, operator_message=message,
-        done_seed=done_seed, checkpoint=checkpoint,
+        done_seed=done_seed, checkpoint=checkpoint, validate_cb=_validate_cb,
     ))
     try:
         from owlforge.engine.orchestrator import read_blackboard
@@ -144,18 +152,24 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
                                 target=target, log=lambda m: emit("status", m))
     except Exception as e:
         emit("log", f"stored pass failed: {type(e).__name__}: {e}")
-    emit("status", "validation phase")
-    vcounts = asyncio.run(validate_findings(assessment_id=aid, sandbox=sandbox_client, emit=emit,
-                                            session_headers=session_headers, identities=identity_set))
-    if vcounts.get("validated", 0) > 0:
+    emit("status", "final validation sweep")
+    asyncio.run(validate_findings(assessment_id=aid, sandbox=sandbox_client, emit=emit,
+                                  session_headers=session_headers, identities=identity_set,
+                                  skip_ids=_examined))
+    # DB is the source of truth now that validation ran incrementally across the hunt
+    with session() as _s:
+        _vtot = len(_s.exec(select(Finding).where(
+            Finding.assessment_id == aid, Finding.status == "validated")).all())
+        _cand = len(_s.exec(select(Finding).where(
+            Finding.assessment_id == aid, Finding.status == "candidate")).all())
+    if _vtot > 0:
         from owlforge.engine.deepen import deepen_findings
         try:
             asyncio.run(deepen_findings(assessment_id=aid, client=client, sandbox=sandbox_client,
                         emit=emit, session_headers=session_headers))
         except Exception as e:
             emit("log", f"deepen phase failed: {e}")
-    emit("status", f"validation — {vcounts['validated']} validated, "
-                   f"{vcounts['rejected']} rejected, {vcounts['manual']} manual")
+    emit("status", f"validation — {_vtot} validated, {_cand} candidate(s) pending manual review")
     from owlforge.engine.validate import collapse_passive_findings, dedupe_findings
     collapse_passive_findings(aid, emit)
     dedupe_findings(aid, emit)
@@ -340,7 +354,11 @@ def run(
     except Exception as e:
         console.print(f"[yellow]recon failed: {e}[/]")
 
-    emit = Emitter(aid, console=console)
+    dash = None
+    if console.is_terminal:
+        from owlforge.engine.dashboard import Dashboard
+        dash = Dashboard(aid, target, cfg.llm.model, console)
+    emit = Emitter(aid, console=console, dashboard=dash)
 
     def _checkpoint(keys):
         with session() as _s:
@@ -357,13 +375,20 @@ def run(
     status = "completed"
     report_path = None
     summary = ""
-    try:
-        summary, report_path = _run_hunt(
+    def _hunt():
+        return _run_hunt(
             aid, target=target, message=message, cfg=cfg, client=client,
             sandbox_client=sandbox_client, session_headers=session_headers,
             identity_set=identity_set, login_specs=login_specs,
             auth_summary=auth_summary, max_turns=max_turns, scope=scope, emit=emit,
             done_seed=_done_seed, checkpoint=_checkpoint)
+
+    try:
+        if dash is not None:
+            with dash:
+                summary, report_path = _hunt()
+        else:
+            summary, report_path = _hunt()
     except KeyboardInterrupt:
         status = "stopped"
         console.print("[yellow]interrupted[/]")

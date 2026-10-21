@@ -31,3 +31,6 @@ missions/
 *.log
 .idea/
 .vscode/
+
+# local-only notes (never pushed)
+.local/
