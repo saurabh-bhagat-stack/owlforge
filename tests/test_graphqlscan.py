@@ -25,7 +25,8 @@ class _SB:
             return {"status": 200, "body": '{"errors":[{"message":"introspection disabled"}]}'}
         if "__typ3name" in b:
             if self.suggestion:
-                return {"status": 400, "body": '{"errors":[{"message":"Cannot query __typ3name. Did you mean \\"__typename\\"?"}]}'}
+                msg = 'Cannot query __typ3name. Did you mean \\"__typename\\"?'
+                return {"status": 400, "body": '{"errors":[{"message":"' + msg + '"}]}'}
             return {"status": 400, "body": '{"errors":[{"message":"Cannot query field"}]}'}
         return {"status": 200, "body": '{"data":{"__typename":"Query"}}'}
 
