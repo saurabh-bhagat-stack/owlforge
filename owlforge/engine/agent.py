@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from owlforge.engine.events import Emitter
 from owlforge.engine.prompts import system_prompt
 from owlforge.llm.base import LLMClient, Message
@@ -9,6 +11,19 @@ from owlforge.sandbox.client import SandboxClient
 from owlforge.tools.base import ToolContext, ToolRegistry
 
 _MAX_TOOL_RESULT = 8000
+_DEDUP_TOOLS = {"http_request", "exec_command"}
+
+
+def _call_sig(name: str, args: dict | None) -> str:
+    """Stable signature of a probing call, so identical repeats can be detected."""
+    a = args or {}
+    if name == "http_request":
+        return ("http:" + str(a.get("method", "GET")).upper() + " " + str(a.get("url", ""))
+                + " p=" + json.dumps(a.get("params") or {}, sort_keys=True, default=str)
+                + " b=" + str(a.get("body") or ""))
+    if name == "exec_command":
+        return "exec:" + str(a.get("command") or "")
+    return ""
 
 
 async def run_single_agent(
@@ -42,6 +57,8 @@ async def run_single_agent(
     actions: list[str] = []
     idle_nudges = 0
     wrapup_sent = False
+    call_sigs: dict[str, int] = {}
+    last_result_for: dict[str, str] = {}
     findings_created = 0
     finding_nudge_sent = False
     bypass_nudge_sent = False
@@ -79,10 +96,27 @@ async def run_single_agent(
                 messages.append(Message(role="tool", tool_call_id=call.id, name=call.name,
                                         content=f"Unknown tool {call.name}."))
                 continue
+            sig = _call_sig(call.name, call.arguments)
+            if sig and call.name in _DEDUP_TOOLS:
+                seen = call_sigs.get(sig, 0)
+                call_sigs[sig] = seen + 1
+                if seen >= 2:
+                    prior = last_result_for.get(sig, "")
+                    emit("log", f"blocked duplicate {call.name} (x{seen + 1}) — nudging agent to vary")
+                    messages.append(Message(role="tool", tool_call_id=call.id, name=call.name,
+                        content=("DUPLICATE REQUEST BLOCKED: you already issued this exact "
+                                 f"{call.name} {seen} times and the response did not change"
+                                 + (f" (was: {prior[:160]})" if prior else "")
+                                 + ". Do NOT repeat it. Change the parameter or payload, test a "
+                                 "DIFFERENT endpoint/parameter from the surface, or — if you already "
+                                 "have evidence — call create_finding. If genuinely done, call finish.")))
+                    continue
             try:
                 result = await tool.run(call.arguments, ctx)
             except Exception as e:  # a tool crash must not kill the loop
                 result = f"tool error: {type(e).__name__}: {e}"
+            if sig:
+                last_result_for[sig] = result
             if call.name == "create_finding" and "filed as candidate" in result:
                 findings_created += 1
             if tool.name not in {"think", "finish"}:

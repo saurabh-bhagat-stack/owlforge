@@ -261,3 +261,45 @@ def test_compaction_digests_dropped_turns_and_pins_task():
     first_non_sys = next(m for m in out if m.role != "system")
     assert first_non_sys.role == "user"                                             # no orphan tool at front
     assert len(out) < len(msgs)                                                      # actually compacted
+
+
+class _AlwaysSameReqClient:
+    """Weak-driver simulation: issues the IDENTICAL http_request every turn,
+    never finishing. The agent loop must stop actually executing it after a
+    couple of repeats (duplicate suppression)."""
+
+    def chat(self, messages, tools=None, *, temperature=None, max_tokens=None) -> AssistantTurn:
+        if not tools:  # forced end-of-run summary
+            return AssistantTurn(content="Summary: kept retrying the same request.")
+        return AssistantTurn(content="retrying", tool_calls=[ToolCall(
+            id="dup", name="http_request",
+            arguments={"method": "GET", "url": "https://example.test/same", "params": {"a": "1"}})])
+
+
+def test_duplicate_requests_are_suppressed():
+    runs = {"n": 0}
+
+    async def _http(args, ctx):
+        runs["n"] += 1
+        return "status=200 len=10"
+
+    reg = ToolRegistry()
+    reg.add(Tool(name="http_request", description="h",
+                 parameters={"type": "object", "properties": {}}, run=_http))
+    emit = Emitter("asmt_dup", persist=False)
+    asyncio.run(run_single_agent(
+        client=_AlwaysSameReqClient(), registry=reg, emit=emit, assessment_id="asmt_dup",
+        target="https://example.test", instructions="probe", scan_mode="quick", max_turns=8,
+    ))
+    # identical request allowed at most twice, then blocked for the rest of the run
+    assert runs["n"] <= 2, f"expected <=2 real executions, got {runs['n']}"
+
+
+def test_call_sig_is_stable_and_discriminating():
+    from owlforge.engine.agent import _call_sig
+    a = _call_sig("http_request", {"method": "get", "url": "u", "params": {"x": "1", "y": "2"}})
+    b = _call_sig("http_request", {"method": "GET", "url": "u", "params": {"y": "2", "x": "1"}})
+    c = _call_sig("http_request", {"method": "GET", "url": "u", "params": {"x": "9"}})
+    assert a == b          # method case + param order do not matter
+    assert a != c          # different payload -> different signature
+    assert _call_sig("think", {"x": 1}) == ""   # non-probing tools are not deduped

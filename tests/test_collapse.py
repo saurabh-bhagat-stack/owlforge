@@ -45,3 +45,35 @@ def test_collapse_merges_same_title_passive(tmp_path, monkeypatch):
     assert "site-wide" in kept.endpoint and "Affected endpoints (3)" in kept.technical_analysis
     assert rows["hsts0"].status == "candidate"   # distinct passive issue untouched
     assert rows["sqli0"].status == "validated"   # real finding untouched
+
+
+def test_validation_preserves_passive_marker_so_collapse_still_works(tmp_path, monkeypatch):
+    """Regression: the no-repro validation branch used to overwrite the
+    "passive observation" note, orphaning per-endpoint config findings so the
+    site-wide collapse could no longer group them (inflated the report)."""
+    import asyncio
+
+    db = _db(tmp_path, monkeypatch)
+    _seed(db)
+    from sqlmodel import select
+
+    from owlforge.engine.events import Emitter
+    from owlforge.engine.validate import collapse_passive_findings, validate_findings
+    from owlforge.store.models import Finding
+
+    # validation runs first in the real pipeline; passive (no-repro) findings must
+    # stay candidate AND keep their marker.
+    asyncio.run(validate_findings(assessment_id="a", sandbox=None,
+                                  emit=Emitter("a", persist=False)))
+    with db.session() as s:
+        csp = s.get(Finding, "csp0")
+        assert csp.status == "candidate"
+        assert "passive observation" in (csp.validation_note or "").lower()
+
+    # and collapse still merges them afterwards
+    n = collapse_passive_findings("a")
+    assert n == 2
+    with db.session() as s:
+        live = [f for f in s.exec(select(Finding).where(Finding.assessment_id == "a")).all()
+                if f.title == "Missing Content-Security-Policy" and f.status == "candidate"]
+    assert len(live) == 1
