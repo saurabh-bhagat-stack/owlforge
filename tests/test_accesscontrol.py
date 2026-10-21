@@ -80,26 +80,26 @@ def test_multi_identity_flags_idor_and_missing_authn_not_public(tmp_path, monkey
         rows = s.exec(select(Finding).where(Finding.assessment_id == "a1")).all()
     eps = {f.endpoint for f in rows}
     assert "https://t/orders/123" in eps            # IDOR: bob reads alice's protected order
-    assert "https://t/my-account" in eps            # missing authn: anon reads account page
-    assert "https://t/catalog?productId=1" not in eps  # public -> NOT flagged (no false positive)
+    # anon-sees-same cases are NOT flagged (can't soundly prove a private-data leak):
+    assert "https://t/my-account" not in eps
+    assert "https://t/catalog?productId=1" not in eps  # public -> NOT flagged
     assert "https://t/orders/999" not in eps        # boundary held -> NOT flagged
-    assert n == 2
+    assert n == 1
     assert all(f.status == "validated" for f in rows)
 
 
-def test_single_session_only_flags_anon_readable_account(tmp_path, monkeypatch):
+def test_single_session_is_conservative(tmp_path, monkeypatch):
     db = _db(tmp_path, monkeypatch)
     from sqlmodel import select
 
     from owlforge.engine.accesscontrol import access_control_scan
     from owlforge.store.models import Finding
-    # no identity set, just one authenticated session -> can only catch missing-authn
+    # one session, no second identity -> cross-read can't be proven, and anon-sees-same is
+    # not soundly a leak -> owlforge files NOTHING (no false positives).
     n = access_control_scan("a2", INV, _SB(), {"Cookie": "u=A"}, None)
     with db.session() as s:
-        eps = {f.endpoint for f in s.exec(select(Finding).where(Finding.assessment_id == "a2")).all()}
-    assert "https://t/my-account" in eps            # anon-readable account page
-    assert "https://t/orders/123" not in eps        # needs a 2nd identity to prove IDOR
-    assert n == 1
+        assert s.exec(select(Finding).where(Finding.assessment_id == "a2")).all() == []
+    assert n == 0
 
 
 def test_noop_without_auth(tmp_path, monkeypatch):

@@ -131,13 +131,13 @@ def access_control_scan(assessment_id, inventory, sandbox, session_headers, iden
         anon_same = (_usable(anon) and _similar(abody, anon.get("body", ""))
                      and not _looks_like_login(anon.get("body", "")))
         if anon_same:
-            # public to everyone -> only a problem if it's an account-scoped resource
-            if _acct_scoped(url):
-                _file(assessment_id, url, method,
-                      "account-scoped resource is readable anonymously "
-                      "(missing authentication / broken access control)")
-                filed += 1
-            continue  # plain public page -> not a finding (avoids the catalog false positive)
+            # Anonymous gets the SAME bytes as the authenticated owner. We CANNOT soundly tell
+            # "anon is reading the user's private data" (a real missing-auth leak) from "both
+            # just see a public/guest page" (guest cart, generic login/landing) by similarity
+            # alone, so we do NOT flag it — guessing here produced false positives on real
+            # targets. A true missing-auth leak needs a second identity (handled below) or a
+            # specialist with knowledge of the user's data.
+            continue
         # resource is protected (anon denied/different). Does another identity read A's copy?
         for b in others:
             r = _get(sandbox, method, url, b.get("headers"))
