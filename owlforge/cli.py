@@ -256,6 +256,9 @@ def run(
             from owlforge.engine.oast import oast_scan
             oast_scan(aid, read_blackboard(aid), sandbox_client, session_headers, cfg.oast,
                       log=lambda m: emit("status", m))
+            from owlforge.engine.accesscontrol import access_control_scan
+            access_control_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                                identity_set, log=lambda m: emit("status", m))
         except Exception as e:
             emit("log", f"stored pass failed: {type(e).__name__}: {e}")
         emit("status", "validation phase")
