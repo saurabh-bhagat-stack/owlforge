@@ -31,6 +31,7 @@ class Assessment(SQLModel, table=True):
     root_agent_id: str | None = None
     report_status: str = "pending"
     error: str | None = None
+    progress: dict = Field(default_factory=dict, sa_column=Column(JSON))  # checkpoint for resume
     created_at: datetime = Field(default_factory=_now)
     updated_at: datetime = Field(default_factory=_now)
     started_at: datetime | None = None
