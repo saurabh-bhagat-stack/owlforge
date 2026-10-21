@@ -67,6 +67,93 @@ def init() -> None:
     console.print("[dim]Set your local model in the config's [llm] model field.[/]")
 
 
+def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_headers,
+              identity_set, login_specs, auth_summary, max_turns, scope, emit,
+              done_seed=None, checkpoint=None):
+    import asyncio
+    summary = ""
+    report_path = None
+    from owlforge.engine.orchestrator import run_orchestrated
+    summary = asyncio.run(run_orchestrated(
+        assessment_id=aid, client=client, sandbox=sandbox_client, emit=emit,
+        session_headers=session_headers, scan_mode="deep", target=target,
+        max_turns=max(6, max_turns // 2), scope=scope, operator_message=message,
+        done_seed=done_seed, checkpoint=checkpoint,
+    ))
+    try:
+        from owlforge.engine.orchestrator import read_blackboard
+        from owlforge.engine.stored import stored_scan
+        stored_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                    log=lambda m: emit("status", m))
+        from owlforge.engine.storedbrowser import browser_stored_scan
+        browser_stored_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                            log=lambda m: emit("status", m))
+        from owlforge.engine.wsprobe import ws_scan
+        ws_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                log=lambda m: emit("status", m))
+        from owlforge.engine.smuggle import smuggle_scan
+        smuggle_scan(aid, target, sandbox_client, log=lambda m: emit("status", m))
+        from owlforge.engine.oast import oast_scan
+        oast_scan(aid, read_blackboard(aid), sandbox_client, session_headers, cfg.oast,
+                  log=lambda m: emit("status", m))
+        from owlforge.engine.blindsqli import time_based_sqli_scan
+        time_based_sqli_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                             log=lambda m: emit("status", m))
+        from owlforge.engine.graphqlscan import graphql_scan
+        graphql_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                     log=lambda m: emit("status", m), target=target)
+        from owlforge.engine.accesscontrol import access_control_scan
+        access_control_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                            identity_set, log=lambda m: emit("status", m))
+        from owlforge.engine.authlogic import jwt_scan
+        jwt_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                 log=lambda m: emit("status", m))
+        from owlforge.engine.bizlogic import bizlogic_scan
+        bizlogic_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                      log=lambda m: emit("status", m))
+        from owlforge.engine.sessionlogic import session_scan
+        session_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                     log=lambda m: emit("status", m))
+        from owlforge.engine.sessionfix import session_fixation_scan
+        session_fixation_scan(aid, sandbox_client, login_specs, log=lambda m: emit("status", m))
+        from owlforge.engine.pwreset import password_reset_scan
+        password_reset_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                            target=target, log=lambda m: emit("status", m))
+        from owlforge.engine.protopoll import proto_pollution_scan
+        proto_pollution_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                             log=lambda m: emit("status", m))
+        from owlforge.engine.clientside import postmessage_scan, subdomain_takeover_scan
+        postmessage_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                         log=lambda m: emit("status", m))
+        subdomain_takeover_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                                target=target, log=lambda m: emit("status", m))
+    except Exception as e:
+        emit("log", f"stored pass failed: {type(e).__name__}: {e}")
+    emit("status", "validation phase")
+    vcounts = asyncio.run(validate_findings(assessment_id=aid, sandbox=sandbox_client, emit=emit,
+                                            session_headers=session_headers, identities=identity_set))
+    if vcounts.get("validated", 0) > 0:
+        from owlforge.engine.deepen import deepen_findings
+        try:
+            asyncio.run(deepen_findings(assessment_id=aid, client=client, sandbox=sandbox_client,
+                        emit=emit, session_headers=session_headers))
+        except Exception as e:
+            emit("log", f"deepen phase failed: {e}")
+    emit("status", f"validation — {vcounts['validated']} validated, "
+                   f"{vcounts['rejected']} rejected, {vcounts['manual']} manual")
+    from owlforge.engine.validate import collapse_passive_findings, dedupe_findings
+    collapse_passive_findings(aid, emit)
+    dedupe_findings(aid, emit)
+    try:
+        from owlforge.engine.chains import correlate_chains
+        correlate_chains(aid, auth_summary=auth_summary, emit=emit)
+    except Exception as e:
+        emit("log", f"chain correlation failed: {type(e).__name__}: {e}")
+    emit("status", "reporting phase")
+    _md, report_path = build_and_save_report(aid)
+    return summary, report_path
+
+
 @app.command()
 def run(
     target: str = typer.Argument(
@@ -93,7 +180,6 @@ def run(
 ) -> None:
     """Run a deep assessment against TARGET. Thorough by default — recon, interactive SPA
     mapping, pre-probe, specialists, validation, and reporting all run automatically."""
-    import asyncio
     import hashlib as _hashlib
     import time as _time
     from urllib.parse import urlparse
@@ -239,87 +325,28 @@ def run(
         console.print(f"[yellow]recon failed: {e}[/]")
 
     emit = Emitter(aid, console=console)
+
+    def _checkpoint(keys):
+        with session() as _s:
+            _a = _s.get(Assessment, aid)
+            if _a:
+                _a.progress = {**(_a.progress or {}), "done_keys": [list(k) for k in keys]}
+                _s.add(_a)
+                _s.commit()
+
+    with session() as _s:
+        _a0 = _s.get(Assessment, aid)
+        _done_seed = (_a0.progress or {}).get("done_keys", []) if _a0 else []
+
     status = "completed"
-    summary = ""
     report_path = None
     try:
-        from owlforge.engine.orchestrator import run_orchestrated
-        summary = asyncio.run(run_orchestrated(
-            assessment_id=aid, client=client, sandbox=sandbox_client, emit=emit,
-            session_headers=session_headers, scan_mode="deep", target=target,
-            max_turns=max(6, max_turns // 2), scope=scope, operator_message=message,
-        ))
-        try:
-            from owlforge.engine.orchestrator import read_blackboard
-            from owlforge.engine.stored import stored_scan
-            stored_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
-                        log=lambda m: emit("status", m))
-            from owlforge.engine.storedbrowser import browser_stored_scan
-            browser_stored_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
-                                log=lambda m: emit("status", m))
-            from owlforge.engine.wsprobe import ws_scan
-            ws_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
-                    log=lambda m: emit("status", m))
-            from owlforge.engine.smuggle import smuggle_scan
-            smuggle_scan(aid, target, sandbox_client, log=lambda m: emit("status", m))
-            from owlforge.engine.oast import oast_scan
-            oast_scan(aid, read_blackboard(aid), sandbox_client, session_headers, cfg.oast,
-                      log=lambda m: emit("status", m))
-            from owlforge.engine.blindsqli import time_based_sqli_scan
-            time_based_sqli_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
-                                 log=lambda m: emit("status", m))
-            from owlforge.engine.graphqlscan import graphql_scan
-            graphql_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
-                         log=lambda m: emit("status", m), target=target)
-            from owlforge.engine.accesscontrol import access_control_scan
-            access_control_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
-                                identity_set, log=lambda m: emit("status", m))
-            from owlforge.engine.authlogic import jwt_scan
-            jwt_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
-                     log=lambda m: emit("status", m))
-            from owlforge.engine.bizlogic import bizlogic_scan
-            bizlogic_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
-                          log=lambda m: emit("status", m))
-            from owlforge.engine.sessionlogic import session_scan
-            session_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
-                         log=lambda m: emit("status", m))
-            from owlforge.engine.sessionfix import session_fixation_scan
-            session_fixation_scan(aid, sandbox_client, login_specs, log=lambda m: emit("status", m))
-            from owlforge.engine.pwreset import password_reset_scan
-            password_reset_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
-                                target=target, log=lambda m: emit("status", m))
-            from owlforge.engine.protopoll import proto_pollution_scan
-            proto_pollution_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
-                                 log=lambda m: emit("status", m))
-            from owlforge.engine.clientside import postmessage_scan, subdomain_takeover_scan
-            postmessage_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
-                             log=lambda m: emit("status", m))
-            subdomain_takeover_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
-                                    target=target, log=lambda m: emit("status", m))
-        except Exception as e:
-            emit("log", f"stored pass failed: {type(e).__name__}: {e}")
-        emit("status", "validation phase")
-        vcounts = asyncio.run(validate_findings(assessment_id=aid, sandbox=sandbox_client, emit=emit,
-                                                session_headers=session_headers, identities=identity_set))
-        if vcounts.get("validated", 0) > 0:
-            from owlforge.engine.deepen import deepen_findings
-            try:
-                asyncio.run(deepen_findings(assessment_id=aid, client=client, sandbox=sandbox_client,
-                            emit=emit, session_headers=session_headers))
-            except Exception as e:
-                emit("log", f"deepen phase failed: {e}")
-        emit("status", f"validation — {vcounts['validated']} validated, "
-                       f"{vcounts['rejected']} rejected, {vcounts['manual']} manual")
-        from owlforge.engine.validate import collapse_passive_findings, dedupe_findings
-        collapse_passive_findings(aid, emit)
-        dedupe_findings(aid, emit)
-        try:
-            from owlforge.engine.chains import correlate_chains
-            correlate_chains(aid, auth_summary=auth_summary, emit=emit)
-        except Exception as e:
-            emit("log", f"chain correlation failed: {type(e).__name__}: {e}")
-        emit("status", "reporting phase")
-        _md, report_path = build_and_save_report(aid)
+        summary, report_path = _run_hunt(
+            aid, target=target, message=message, cfg=cfg, client=client,
+            sandbox_client=sandbox_client, session_headers=session_headers,
+            identity_set=identity_set, login_specs=login_specs,
+            auth_summary=auth_summary, max_turns=max_turns, scope=scope, emit=emit,
+            done_seed=_done_seed, checkpoint=_checkpoint)
     except KeyboardInterrupt:
         status = "stopped"
         console.print("[yellow]interrupted[/]")
@@ -351,6 +378,89 @@ def run(
             border_style="green" if status == "completed" else "red",
         )
     )
+
+
+@app.command()
+def resume(assessment_id: str) -> None:
+    """Resume an interrupted assessment — skips specialists already completed (checkpointed)."""
+    init_db()
+    cfg = load_config()
+    with session() as s:
+        a = s.get(Assessment, assessment_id)
+    if not a:
+        console.print(f"[red]No such assessment: {assessment_id}[/]")
+        raise typer.Exit(1)
+    if a.status == "completed":
+        console.print(f"[yellow]{assessment_id} already completed — see `owlforge report "
+                      f"{assessment_id}`.[/]")
+        raise typer.Exit(0)
+    aid, target, message = a.id, a.target, a.instructions
+    try:
+        client = make_client(cfg)
+    except LLMError as e:
+        console.print(f"[red]{e}[/]")
+        raise typer.Exit(1) from None
+    sblog = lambda m: console.print(rf"[dim]\[sandbox] {m}[/]")  # noqa: E731
+    if not cfg.sandbox.enabled or not manager.docker_available() \
+            or not manager.image_exists(cfg.sandbox.image):
+        console.print("[red]Sandbox/Docker not available. Start Docker and "
+                      "`owlforge sandbox build`, then resume.[/]")
+        raise typer.Exit(1)
+    sandbox_session = manager.start(cfg.sandbox.image, workspace=str(assessments_dir() / aid),
+                                    log=sblog)
+    sandbox_client = sandbox_session.client
+    from owlforge.engine.auth import AuthContext
+    from owlforge.engine.recon import run_recon
+    from owlforge.engine.scope import build_scope
+    scope = build_scope(target)
+    console.print(f"[cyan]resuming {aid} → {target}[/]")
+    session_headers, auth_summary = {}, ""
+    try:
+        _st, session_headers, auth_summary = run_recon(
+            aid, target, sandbox_client, user_auth=AuthContext(mode="unauth"),
+            max_pages=40, browser_recon_enabled=True, scope=scope,
+            log=lambda m: console.print(rf"[dim]\[recon] {m}[/]"))
+    except Exception as e:
+        console.print(f"[yellow]recon failed: {e}[/]")
+    emit = Emitter(aid, console=console)
+
+    def _checkpoint(keys):
+        with session() as _s:
+            _a = _s.get(Assessment, aid)
+            if _a:
+                _a.progress = {**(_a.progress or {}), "done_keys": [list(k) for k in keys]}
+                _s.add(_a)
+                _s.commit()
+
+    with session() as _s:
+        _a0 = _s.get(Assessment, aid)
+        _done_seed = (_a0.progress or {}).get("done_keys", []) if _a0 else []
+    console.print(f"[dim]resuming past {len(_done_seed)} completed specialist target(s)[/]")
+
+    status, summary, report_path = "completed", "", None
+    try:
+        summary, report_path = _run_hunt(
+            aid, target=target, message=message, cfg=cfg, client=client,
+            sandbox_client=sandbox_client, session_headers=session_headers,
+            identity_set=None, login_specs=[], auth_summary=auth_summary,
+            max_turns=24, scope=scope, emit=emit, done_seed=_done_seed, checkpoint=_checkpoint)
+    except KeyboardInterrupt:
+        status = "stopped"
+        console.print("[yellow]interrupted[/]")
+    except Exception as e:
+        status = "failed"
+        emit("error", f"{type(e).__name__}: {e}")
+    finally:
+        manager.stop(sandbox_session, log=sblog)
+    with session() as s:
+        a = s.get(Assessment, aid)
+        if a:
+            a.status = status
+            s.add(a)
+            s.commit()
+    console.print(Panel.fit(
+        (summary or "(resumed)") + (f"\nreport: {report_path}" if report_path else ""),
+        title=f"assessment {status}", border_style="green" if status == "completed" else "red"))
 
 
 @assessments_app.command("list")

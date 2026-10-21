@@ -232,9 +232,11 @@ async def run_orchestrated(
     scope=None,
     max_rounds: int = 2,
     operator_message: str = "",
+    done_seed=None,
+    checkpoint=None,
 ) -> str:
     registry = build_registry(with_sandbox=sandbox is not None)
-    done_keys: set = set()
+    done_keys: set = {tuple(k) for k in (done_seed or [])}
     ran: list[str] = []
 
     for rnd in range(max_rounds):
@@ -310,6 +312,11 @@ async def run_orchestrated(
                 emit("error", f"specialist {cls} crashed: {type(e).__name__}: {e}")
             for t in targets:
                 done_keys.add((cls, t["url"], t.get("param")))
+            if checkpoint is not None:
+                try:
+                    checkpoint(done_keys)
+                except Exception:
+                    pass
             ran.append(cls)
             ran_this_round += 1
         if ran_this_round == 0:
