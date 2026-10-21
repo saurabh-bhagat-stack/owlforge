@@ -16,130 +16,67 @@ verification, and owlforge prints exactly which config key to set to fix it.
 
 from __future__ import annotations
 
-import base64
-import re
 import secrets as _secrets
-import shlex
 import time
 from collections.abc import Callable
 
 from owlforge.engine.classify import SSRF, classify_param
-
-_OUT = "/workspace/oast.jsonl"
-_PAYLOAD = "/workspace/oast_payload.txt"
-_HITS = "/workspace/oast_hits.log"
 
 # param names that strongly imply an SSRF/URL sink (OAST targets + the no-OAST fallback)
 _SSRF_HINT = ("url", "uri", "redirect", "redir", "next", "return", "returnurl", "callback",
               "dest", "destination", "host", "feed", "webhook", "proxy", "fetch", "link",
               "page", "domain", "site", "target", "endpoint", "store", "storeid")
 
-# tiny HTTP listener: log each request path (then the tunnel exposes it publicly)
-_LISTENER_PY = (
-    "import http.server\n"
-    "class H(http.server.BaseHTTPRequestHandler):\n"
-    "    def _l(self):\n"
-    "        open('/workspace/oast_hits.log','a').write(self.path+'\\n')\n"
-    "        self.send_response(200); self.end_headers(); self.wfile.write(b'ok')\n"
-    "    do_GET=_l; do_POST=_l; do_HEAD=_l\n"
-    "    def log_message(self,*a): pass\n"
-    "http.server.HTTPServer(('127.0.0.1',PORT),H).serve_forever()\n"
-)
-
-
-def _ok(r) -> str:
-    return getattr(r, "stdout", "") or ""
-
 
 class OastSession:
-    """Provisions a callback host (interactsh -> tunnel -> BYO) and reads interactions."""
+    """Provisions a callback host (interactsh -> tunnel -> BYO) via agentd-managed
+    subprocesses and reads interactions. agentd owns the long-lived process because /exec
+    cannot keep a daemon alive across calls (it blocks on the output pipe)."""
 
     def __init__(self, sandbox, cfg):
         self.sandbox = sandbox
         self.cfg = cfg
-        self.domain = ""        # interactsh/BYO: base domain; tunnel: public host
-        self.mode = ""          # "interactsh" | "tunnel"
-        self.source = ""        # human-readable provider name
+        self.domain = ""
+        self.mode = ""
+        self.source = ""
         self.available = False
-        self._hits_file = _OUT
+        self._hits_file = ""
 
-    # ---- provider 1 & 3: interactsh (public, or a BYO self-hosted server) ----
     def _try_interactsh(self, server, token, source, log) -> bool:
         if not server:
             return False
-        tok = f" -t {shlex.quote(token)}" if token else ""
-        cmd = (
-            f"pkill -f interactsh-client 2>/dev/null; rm -f {_OUT} {_PAYLOAD}; "
-            f"command -v interactsh-client >/dev/null 2>&1 || {{ echo __NO_INTERACTSH__; exit 0; }}; "
-            f"nohup interactsh-client -server {shlex.quote(server)}{tok} -json -o {_OUT} "
-            f"-ps -psf {_PAYLOAD} -pi 1 -duc -nf >/dev/null 2>&1 & "
-            f"for i in $(seq 1 14); do [ -s {_PAYLOAD} ] && break; sleep 1; done; "
-            f"cat {_PAYLOAD} 2>/dev/null"
-        )
         try:
-            out = _ok(self.sandbox.exec(cmd, timeout_ms=25_000))
+            d = self.sandbox.oast_start("interactsh", server=server, token=token or "")
         except Exception as e:
             log(f"oast: interactsh start failed ({e})")
             return False
-        if "__NO_INTERACTSH__" in out:
-            log("oast: interactsh-client not in the sandbox image")
+        if not isinstance(d, dict) or d.get("error"):
+            log(f"oast: {d.get('error') if isinstance(d, dict) else 'interactsh failed'}")
             return False
-        m = re.search(r"\b([a-z0-9]{20,}\.[a-z0-9.\-]+\.[a-z]{2,})\b", out)
-        if not m:
-            return False
-        self.domain, self.mode, self.source, self.available = m.group(1), "interactsh", source, True
-        self._hits_file = _OUT
-        log(f"oast: callback domain {self.domain} via {source}")
-        return True
+        self.domain, self.mode, self.source = d.get("domain", ""), "interactsh", source
+        self._hits_file, self.available = d.get("hits_file", ""), bool(d.get("domain"))
+        if self.available:
+            log(f"oast: callback domain {self.domain} via {source}")
+        return self.available
 
-    # ---- provider 2: cloudflared/ngrok tunnel to an in-sandbox listener ----
     def _try_tunnel(self, log) -> bool:
         if not getattr(self.cfg, "tunnel", True):
             return False
-        port = 40000 + _secrets.randbelow(20000)
-        listener_b64 = base64.b64encode(
-            _LISTENER_PY.replace("PORT", str(port)).encode()).decode()
         ngrok_tok = getattr(self.cfg, "ngrok_token", "") or ""
-        if ngrok_tok:
-            tunnel_cmd = (f"command -v ngrok >/dev/null 2>&1 || {{ echo __NO_TUNNEL__; exit 0; }}; "
-                          f"nohup ngrok http {port} --authtoken {shlex.quote(ngrok_tok)} "
-                          f"--log stdout --log-format logfmt >/workspace/tun.out 2>&1 & "
-                          f"for i in $(seq 1 18); do grep -qE 'url=https://' /workspace/tun.out 2>/dev/null "
-                          f"&& break; sleep 1; done; "
-                          f"grep -oE 'url=https://[a-z0-9.\\-]+' /workspace/tun.out | head -1 | cut -d= -f2")
-            name = "ngrok tunnel"
-        else:
-            tunnel_cmd = (f"command -v cloudflared >/dev/null 2>&1 || {{ echo __NO_TUNNEL__; exit 0; }}; "
-                          f"nohup cloudflared tunnel --url http://127.0.0.1:{port} --no-autoupdate "
-                          f">/workspace/tun.out 2>&1 & "
-                          f"for i in $(seq 1 22); do grep -qE 'https://[a-z0-9-]+\\.trycloudflare\\.com' "
-                          f"/workspace/tun.out 2>/dev/null && break; sleep 1; done; "
-                          f"grep -oE 'https://[a-z0-9-]+\\.trycloudflare\\.com' /workspace/tun.out | head -1")
-            name = "cloudflare tunnel"
-        cmd = (
-            f"pkill -f oast_listener 2>/dev/null; pkill -f 'cloudflared tunnel' 2>/dev/null; "
-            f"pkill -f 'ngrok http' 2>/dev/null; rm -f {_HITS} /workspace/tun.out; "
-            f"echo {listener_b64} | base64 -d > /workspace/oast_listener.py; "
-            f"nohup python3 /workspace/oast_listener.py >/dev/null 2>&1 & "
-            f"{tunnel_cmd}"
-        )
+        name = "ngrok tunnel" if ngrok_tok else "cloudflare tunnel"
         try:
-            out = _ok(self.sandbox.exec(cmd, timeout_ms=30_000))
+            d = self.sandbox.oast_start("tunnel", ngrok_token=ngrok_tok)
         except Exception as e:
             log(f"oast: tunnel start failed ({e})")
             return False
-        if "__NO_TUNNEL__" in out:
-            log(f"oast: {name.split()[0]} not in the sandbox image")
+        if not isinstance(d, dict) or d.get("error"):
+            log(f"oast: {d.get('error') if isinstance(d, dict) else 'tunnel failed'}")
             return False
-        m = re.search(r"https://[a-z0-9.\-]+", out)
-        if not m:
-            log(f"oast: {name} did not come up")
-            return False
-        self.domain = m.group(0).split("://", 1)[1].rstrip("/")
-        self.mode, self.source, self.available = "tunnel", name, True
-        self._hits_file = _HITS
-        log(f"oast: callback host {self.domain} via {name}")
-        return True
+        self.domain, self.mode, self.source = d.get("domain", ""), "tunnel", name
+        self._hits_file, self.available = d.get("hits_file", ""), bool(d.get("domain"))
+        if self.available:
+            log(f"oast: callback host {self.domain} via {name}")
+        return self.available
 
     def start(self, log: Callable[[str], None] = lambda m: None) -> bool:
         if self.sandbox is None or not getattr(self.cfg, "enabled", True):
@@ -165,16 +102,13 @@ class OastSession:
 
     def collect(self) -> str:
         try:
-            return _ok(self.sandbox.exec(f"cat {self._hits_file} 2>/dev/null", timeout_ms=15_000))
+            return self.sandbox.oast_poll(self._hits_file).get("data", "") if self._hits_file else ""
         except Exception:
             return ""
 
     def stop(self) -> None:
         try:
-            self.sandbox.exec("pkill -f interactsh-client 2>/dev/null; "
-                              "pkill -f 'cloudflared tunnel' 2>/dev/null; "
-                              "pkill -f 'ngrok http' 2>/dev/null; "
-                              "pkill -f oast_listener 2>/dev/null; true", timeout_ms=10_000)
+            self.sandbox.oast_stop()
         except Exception:
             pass
 

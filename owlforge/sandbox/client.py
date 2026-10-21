@@ -100,6 +100,27 @@ class SandboxClient:
         r.raise_for_status()
         return r.json()
 
+    def oast_start(self, provider: str = "interactsh", *, server: str = "", token: str = "",
+                   ngrok_token: str = "") -> dict:
+        """Start a persistent OAST provider (interactsh or tunnel) as a managed subprocess."""
+        r = httpx.post(f"{self.base_url}/oast/start", headers=self._headers(),
+                       json={"provider": provider, "server": server, "token": token,
+                             "ngrok_token": ngrok_token}, timeout=max(self.timeout, 60))
+        r.raise_for_status()
+        return r.json()
+
+    def oast_poll(self, hits_file: str) -> dict:
+        r = httpx.post(f"{self.base_url}/oast/poll", headers=self._headers(),
+                       json={"hits_file": hits_file}, timeout=self.timeout)
+        r.raise_for_status()
+        return r.json()
+
+    def oast_stop(self) -> dict:
+        r = httpx.post(f"{self.base_url}/oast/stop", headers=self._headers(),
+                       json={}, timeout=self.timeout)
+        r.raise_for_status()
+        return r.json()
+
     def smuggle_probe(self, url: str, *, timeout_s: float = 10.0) -> dict:
         """Time-based request-smuggling (CL.TE/TE.CL) detection."""
         r = httpx.post(f"{self.base_url}/smuggle_probe", headers=self._headers(),

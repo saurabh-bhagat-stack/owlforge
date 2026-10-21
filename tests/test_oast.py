@@ -1,9 +1,11 @@
-"""P0 #2: out-of-band (OAST) blind SSRF/XXE via interactsh -> tunnel -> BYO (offline fakes)."""
+"""P0 #2: out-of-band (OAST) blind SSRF/XXE via interactsh -> tunnel -> BYO (offline fakes).
+
+The sandbox owns the long-lived provider via agentd /oast/*; the fake mimics that contract.
+"""
 
 from __future__ import annotations
 
 import re
-from types import SimpleNamespace
 
 
 def _db(tmp_path, monkeypatch):
@@ -16,35 +18,40 @@ def _db(tmp_path, monkeypatch):
     return db
 
 
-def _ns(stdout):
-    return SimpleNamespace(stdout=stdout, stderr="", exit_code=0)
-
-
 class _SB:
-    """Fake sandbox. `interactsh`/`tunnel` toggle which provider comes up; `callback` echoes
-    injected tokens back as interactions; `installed` controls interactsh-client presence."""
+    """Fake sandbox implementing the agentd OAST contract. `interactsh`/`tunnel`/`byo`
+    toggle which provider comes up; `callback` echoes injected tokens back as interactions."""
 
     DOMAIN = "cabc123def456ghij789.oast.pro"
     CF = "random-words-here.trycloudflare.com"
+    OUT = "/workspace/oast.jsonl"
+    HITS = "/workspace/oast_hits.log"
 
-    def __init__(self, interactsh=True, tunnel=False, callback=True, installed=True):
+    def __init__(self, interactsh=True, tunnel=False, byo=False, callback=True):
         self.interactsh = interactsh
         self.tunnel = tunnel
+        self.byo = byo
         self.callback = callback
-        self.installed = installed
         self.hits = ""
         self.injected = []
 
-    def exec(self, cmd, timeout_ms=0):
-        if "-psf" in cmd:                                        # interactsh start
-            if not self.installed:
-                return _ns("__NO_INTERACTSH__\n")
-            return _ns(f"{self.DOMAIN}\n" if self.interactsh else "")
-        if "cloudflared tunnel" in cmd or "ngrok http" in cmd:   # tunnel start
-            return _ns(f"https://{self.CF}\n" if self.tunnel else "")
-        if "oast.jsonl" in cmd or "oast_hits.log" in cmd:        # collect
-            return _ns(self.hits)
-        return _ns("")
+    def oast_start(self, provider="interactsh", *, server="", token="", ngrok_token=""):
+        if provider == "interactsh":
+            if server and "example" in server:            # a BYO collaborator domain
+                return ({"domain": self.DOMAIN, "hits_file": self.OUT, "mode": "interactsh"}
+                        if self.byo else {"error": "byo unreachable"})
+            return ({"domain": self.DOMAIN, "hits_file": self.OUT, "mode": "interactsh"}
+                    if self.interactsh else {"error": "interactsh unreachable"})
+        if provider == "tunnel":
+            return ({"domain": self.CF, "hits_file": self.HITS, "mode": "tunnel"}
+                    if self.tunnel else {"error": "tunnel did not come up"})
+        return {"error": "unknown provider"}
+
+    def oast_poll(self, hits_file):
+        return {"data": self.hits}
+
+    def oast_stop(self):
+        return {"stopped": True}
 
     def http_request(self, method, url, *, headers=None, params=None, body=None, timeout_ms=30_000):
         blob = f"{params} {body} {url}"
@@ -75,38 +82,25 @@ def test_extract_targets():
     assert _xxe_endpoints(INV) == ["https://t/catalog/product/stock"]
 
 
-def test_interactsh_is_tried_first():
+def test_interactsh_first():
     from owlforge.engine.oast import OastSession
     sess = OastSession(_SB(interactsh=True, tunnel=True), _cfg())
-    assert sess.start() is True
-    assert sess.mode == "interactsh" and sess.domain == _SB.DOMAIN
+    assert sess.start() and sess.mode == "interactsh" and sess.domain == _SB.DOMAIN
     assert sess.url("owldeadbeef") == f"http://owldeadbeef.{_SB.DOMAIN}/"
 
 
-def test_tunnel_used_when_interactsh_blocked():
+def test_tunnel_when_interactsh_blocked():
     from owlforge.engine.oast import OastSession
     sess = OastSession(_SB(interactsh=False, tunnel=True), _cfg())
-    assert sess.start() is True
-    assert sess.mode == "tunnel" and sess.domain == _SB.CF
-    assert sess.url("owldeadbeef") == f"https://{_SB.CF}/owldeadbeef"  # path token, not subdomain
+    assert sess.start() and sess.mode == "tunnel" and sess.domain == _SB.CF
+    assert sess.url("owldeadbeef") == f"https://{_SB.CF}/owldeadbeef"  # path token
 
 
-def test_byo_collaborator_used_when_auto_blocked():
+def test_byo_when_auto_blocked():
     from owlforge.engine.oast import OastSession
-    sb = _SB(interactsh=False, tunnel=False)
-    calls = {"n": 0}
-    orig = sb.exec
-
-    def exec_counting(cmd, timeout_ms=0):
-        if "-psf" in cmd:
-            calls["n"] += 1
-            return _ns(_SB.DOMAIN + "\n") if calls["n"] >= 2 else _ns("")
-        return orig(cmd, timeout_ms)
-
-    sb.exec = exec_counting
-    sess = OastSession(sb, _cfg(collaborator_url="my.interactsh.example", token="t"))
-    assert sess.start() is True
-    assert sess.source == "your configured collaborator"
+    sess = OastSession(_SB(interactsh=False, tunnel=False, byo=True),
+                       _cfg(collaborator_url="my.interactsh.example", token="t"))
+    assert sess.start() and sess.source == "your configured collaborator"
 
 
 def test_scan_files_blind_on_callback(tmp_path, monkeypatch):
@@ -123,17 +117,17 @@ def test_scan_files_blind_on_callback(tmp_path, monkeypatch):
     assert any("XML external entity" in t for t in titles)
 
 
-def test_scan_via_tunnel_files_blind(tmp_path, monkeypatch):
+def test_scan_via_tunnel(tmp_path, monkeypatch):
     db = _db(tmp_path, monkeypatch)
     monkeypatch.setattr("owlforge.engine.oast.time.sleep", lambda *_: None)
     from sqlmodel import select
 
     from owlforge.engine.oast import oast_scan
     from owlforge.store.models import Finding
-    assert oast_scan("a2", INV, _SB(interactsh=False, tunnel=True, callback=True), {}, _cfg()) >= 1
+    assert oast_scan("a2", INV, _SB(interactsh=False, tunnel=True), {}, _cfg()) >= 1
     with db.session() as s:
-        rows = s.exec(select(Finding).where(Finding.assessment_id == "a2")).all()
-    assert any("Blind SSRF" in f.title for f in rows)
+        assert any("Blind SSRF" in f.title
+                   for f in s.exec(select(Finding).where(Finding.assessment_id == "a2")).all())
 
 
 def test_no_callback_files_nothing(tmp_path, monkeypatch):
@@ -155,7 +149,8 @@ def test_fallback_flags_and_names_config(tmp_path, monkeypatch):
 
     from owlforge.engine.oast import oast_scan
     from owlforge.store.models import Finding
-    n = oast_scan("a4", INV, _SB(installed=False, tunnel=False), {}, _cfg(), log=msgs.append)
+    n = oast_scan("a4", INV, _SB(interactsh=False, tunnel=False, byo=False), {}, _cfg(),
+                  log=msgs.append)
     assert n >= 1
     with db.session() as s:
         rows = s.exec(select(Finding).where(Finding.assessment_id == "a4")).all()

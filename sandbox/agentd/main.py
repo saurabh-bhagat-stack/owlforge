@@ -643,6 +643,151 @@ async def map_app(req: MapRequest) -> dict:
     }
 
 
+_OAST: dict[str, object] = {}
+
+
+def _oast_kill() -> None:
+    for p in list(_OAST.values()):
+        try:
+            p.kill()
+        except Exception:
+            pass
+    _OAST.clear()
+    for n in ("interactsh-client", "cloudflared tunnel", "ngrok http", "oast_listener"):
+        _pkill(n)
+
+
+class OastStartRequest(BaseModel):
+    provider: str = "interactsh"   # "interactsh" | "tunnel"
+    server: str = ""
+    token: str = ""
+    ngrok_token: str = ""
+    port: int = 48080
+
+
+@app.post("/oast/start", dependencies=[Depends(auth)])
+def oast_start(req: OastStartRequest) -> dict:
+    """Start a persistent OAST callback provider as a managed subprocess (so it survives
+    across requests, unlike /exec). Returns the callback domain + the hits file to poll."""
+    import re as _re
+
+    _oast_kill()
+    ws = WORKSPACE
+    try:
+        os.makedirs(ws, exist_ok=True)
+    except Exception:
+        pass
+
+    if req.provider == "interactsh":
+        out_file = os.path.join(ws, "oast.jsonl")
+        payload_file = os.path.join(ws, "oast_payload.txt")
+        for f in (out_file, payload_file):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+        args = ["interactsh-client", "-json", "-o", out_file,
+                "-ps", "-psf", payload_file, "-pi", "1", "-duc", "-nf"]
+        if req.server:
+            args += ["-server", req.server]
+        if req.token:
+            args += ["-t", req.token]
+        try:
+            p = subprocess.Popen(args, stdout=_DEVNULL, stderr=_DEVNULL, stdin=_DEVNULL,
+                                 cwd=ws, start_new_session=True)
+        except FileNotFoundError:
+            return {"error": "interactsh-client not installed in the sandbox image"}
+        _OAST["interactsh"] = p
+        domain = ""
+        for _ in range(20):
+            try:
+                if os.path.getsize(payload_file) > 0:
+                    first = open(payload_file).read().strip().splitlines()
+                    if first:
+                        domain = first[0].strip()
+                        break
+            except Exception:
+                pass
+            time.sleep(1)
+        if not domain:
+            _oast_kill()
+            return {"error": "interactsh did not register (server unreachable / blocked?)"}
+        return {"mode": "interactsh", "domain": domain, "hits_file": out_file}
+
+    if req.provider == "tunnel":
+        port = int(req.port or 48080)
+        hits = os.path.join(ws, "oast_hits.log")
+        tun = os.path.join(ws, "tun.out")
+        listener = os.path.join(ws, "oast_listener.py")
+        for f in (hits, tun):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
+        with open(listener, "w") as fh:
+            fh.write(
+                "import http.server\n"
+                "class H(http.server.BaseHTTPRequestHandler):\n"
+                " def _l(self):\n"
+                f"  open({hits!r},'a').write(self.path+chr(10))\n"
+                "  self.send_response(200); self.end_headers(); self.wfile.write(b'ok')\n"
+                " do_GET=_l; do_POST=_l; do_HEAD=_l\n"
+                " def log_message(self,*a): pass\n"
+                f"http.server.HTTPServer(('127.0.0.1',{port}),H).serve_forever()\n"
+            )
+        _OAST["listener"] = subprocess.Popen(
+            ["python3", listener], stdout=_DEVNULL, stderr=_DEVNULL, stdin=_DEVNULL,
+            start_new_session=True)
+        if req.ngrok_token:
+            targs = ["ngrok", "http", str(port), "--authtoken", req.ngrok_token,
+                     "--log", "stdout", "--log-format", "logfmt"]
+        else:
+            targs = ["cloudflared", "tunnel", "--url", f"http://127.0.0.1:{port}", "--no-autoupdate"]
+        try:
+            tf = open(tun, "w")
+            _OAST["tunnel"] = subprocess.Popen(targs, stdout=tf, stderr=tf, stdin=_DEVNULL,
+                                               start_new_session=True)
+        except FileNotFoundError:
+            _oast_kill()
+            return {"error": "tunnel binary (cloudflared/ngrok) not installed in the image"}
+        domain = ""
+        for _ in range(24):
+            try:
+                txt = open(tun).read()
+                m = (_re.search(r"https://[a-z0-9.\-]+\.trycloudflare\.com", txt)
+                     or _re.search(r"url=https://[a-z0-9.\-]+", txt))
+                if m:
+                    domain = m.group(0).replace("url=", "").split("://", 1)[1].rstrip("/")
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+        if not domain:
+            _oast_kill()
+            return {"error": "tunnel did not come up (server unreachable / blocked?)"}
+        return {"mode": "tunnel", "domain": domain, "hits_file": hits}
+
+    return {"error": f"unknown provider {req.provider}"}
+
+
+class OastPollRequest(BaseModel):
+    hits_file: str
+
+
+@app.post("/oast/poll", dependencies=[Depends(auth)])
+def oast_poll(req: OastPollRequest) -> dict:
+    try:
+        return {"data": open(req.hits_file).read()}
+    except Exception:
+        return {"data": ""}
+
+
+@app.post("/oast/stop", dependencies=[Depends(auth)])
+def oast_stop() -> dict:
+    _oast_kill()
+    return {"stopped": True}
+
+
 class WsProbeRequest(BaseModel):
     url: str
     messages: list[str] | None = None
