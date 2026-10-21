@@ -93,10 +93,21 @@ async def validate_findings(
         ).all()
         items = [(f.id, f.repro_command, f.success_signal, f.title,
                   f.repro_method, f.repro_url, dict(f.repro_params or {}), f.repro_body,
-                  f.repro_content_type, f.validation_note) for f in rows]
+                  f.repro_content_type, f.validation_note, f.endpoint) for f in rows]
+    # findings a deterministic pass already proved -> a candidate that merely
+    # restates one of these is a duplicate, not something to re-probe and reject.
+    with session() as s:
+        _validated = s.exec(select(Finding).where(
+            Finding.assessment_id == assessment_id, Finding.status == "validated")).all()
+        validated_keys = {_dupe_key(f.title, f.endpoint or f.repro_url,
+                                    f.method or f.repro_method, f.repro_params)
+                          for f in _validated}
 
     counts = {"validated": 0, "rejected": 0, "manual": 0}
-    for fid, repro, signal, title, rmethod, rurl, rparams, rbody, rct, vnote in items:
+    for fid, repro, signal, title, rmethod, rurl, rparams, rbody, rct, vnote, endpoint in items:
+        if _dupe_key(title, endpoint or rurl, rmethod, rparams) in validated_keys:
+            _set(fid, "duplicate", note="duplicate of a deterministically-validated finding")
+            continue
         if _needs_differential(title):
             verdict, note = None, ""
             if sandbox is not None and rurl.strip():
@@ -333,6 +344,17 @@ def _class_hint(title: str) -> str:
     return "other"
 
 
+def _dupe_key(title, endpoint, method, params):
+    """Identity used to recognise two findings as the same issue (class + endpoint +
+    method + param set). Shared by dedupe and by the validation pre-check so a candidate
+    that merely restates an already-validated deterministic finding is collapsed, not
+    re-probed and rejected."""
+    hint = _class_hint(title)
+    title_key = (title or "").strip().lower() if hint == "other" else ""
+    return (hint, (endpoint or "").rstrip("/"), (method or "GET").upper(),
+            tuple(sorted((params or {}).keys())), title_key)
+
+
 _STATUS_RANK = {"validated": 3, "candidate": 2, "false_positive": 1, "duplicate": 0}
 _SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 
@@ -390,14 +412,8 @@ def dedupe_findings(assessment_id: str, emit: Emitter | None = None) -> int:
         for f in rows:
             if f.status == "duplicate":
                 continue
-            hint = _class_hint(f.title)
-            # for observational/"other" findings the TITLE distinguishes distinct issues
-            # (Missing CSP vs Missing HSTS on one page); for known vuln classes the title
-            # is omitted so phrasing variants of the same vuln still collapse.
-            title_key = f.title.strip().lower() if hint == "other" else ""
-            key = (hint, (f.endpoint or f.repro_url or "").rstrip("/"),
-                   (f.method or f.repro_method or "GET").upper(),
-                   tuple(sorted((f.repro_params or {}).keys())), title_key)
+            key = _dupe_key(f.title, f.endpoint or f.repro_url,
+                            f.method or f.repro_method, f.repro_params)
             groups.setdefault(key, []).append(f)
 
         collapsed = 0

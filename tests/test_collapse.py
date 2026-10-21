@@ -77,3 +77,33 @@ def test_validation_preserves_passive_marker_so_collapse_still_works(tmp_path, m
         live = [f for f in s.exec(select(Finding).where(Finding.assessment_id == "a")).all()
                 if f.title == "Missing Content-Security-Policy" and f.status == "candidate"]
     assert len(live) == 1
+
+
+def test_candidate_dup_of_validated_is_collapsed_not_rejected(tmp_path, monkeypatch):
+    """A deterministic pass validates GraphQL introspection; the LLM specialist files the
+    same thing as a candidate with a repro that won't re-reproduce. It must be collapsed
+    as a duplicate, not re-probed and shown as 'rejected'."""
+    import asyncio
+
+    db = _db(tmp_path, monkeypatch)
+    from owlforge.store.models import Finding
+    with db.session() as s:
+        s.add(Finding(id="det0", assessment_id="a", title="GraphQL introspection enabled",
+                      severity="medium", status="validated", confidence="high",
+                      endpoint="https://t/graphql", method="POST"))
+        s.add(Finding(id="llm0", assessment_id="a", title="GraphQL introspection enabled",
+                      severity="medium", status="candidate", method="POST",
+                      repro_url="https://t/graphql", repro_method="POST",
+                      repro_command="curl ...", success_signal="__schema"))
+        s.commit()
+
+    from owlforge.engine.events import Emitter
+    from owlforge.engine.validate import validate_findings
+    counts = asyncio.run(validate_findings(assessment_id="a", sandbox=None,
+                                           emit=Emitter("a", persist=False)))
+    assert counts["rejected"] == 0            # the dup was NOT rejected
+    with db.session() as s:
+        llm = s.get(Finding, "llm0")
+        det = s.get(Finding, "det0")
+    assert llm.status == "duplicate"
+    assert det.status == "validated"
