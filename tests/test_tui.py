@@ -35,3 +35,17 @@ def test_emitter_suppresses_consecutive_duplicates():
     assert text.count("recon: crawled 7 page(s)") == 1      # printed once, not 3x
     assert "repeated x2 more" in text                        # with a collapse notice
     assert "next step" in text
+
+
+def test_banner_renders_wordmark():
+    import io
+
+    from rich.console import Console
+
+    import owlforge.cli as cli
+    from owlforge import __version__
+    buf = io.StringIO()
+    cli.console = Console(file=buf, width=80, no_color=True)
+    cli._banner()
+    out = buf.getvalue()
+    assert "owlforge" in out and __version__ in out
