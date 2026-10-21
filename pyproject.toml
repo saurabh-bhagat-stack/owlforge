@@ -25,6 +25,7 @@ dependencies = [
     "openai>=1.40",
     "httpx>=0.27",
     "platformdirs>=4.2",
+    "textual>=0.60",
 ]
 
 [project.optional-dependencies]

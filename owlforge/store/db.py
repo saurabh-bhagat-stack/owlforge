@@ -19,7 +19,10 @@ def get_engine():
     global _engine
     if _engine is None:
         owlforge_home().mkdir(parents=True, exist_ok=True)
-        _engine = create_engine(f"sqlite:///{db_path()}", echo=False)
+        # check_same_thread=False: the live TUI reads findings on the UI thread while the
+        # scan writes from a worker thread; SQLite still serialises access internally.
+        _engine = create_engine(f"sqlite:///{db_path()}", echo=False,
+                                connect_args={"check_same_thread": False})
     return _engine
 
 

@@ -380,11 +380,7 @@ def run(
     _tm = _re.search(r"tech=([^;\n]+)", surface_text or "")
     detected_tech = [t.strip() for t in _tm.group(1).split(",")] if _tm else []
     detected_tech = [t for t in detected_tech if t and t != "?"]
-    dash = None
-    if dashboard_ui and console.is_terminal:
-        from owlforge.engine.dashboard import Dashboard
-        dash = Dashboard(aid, target, cfg.llm.model, console)
-    emit = Emitter(aid, console=console, dashboard=dash)
+    _use_tui = dashboard_ui and console.is_terminal
 
     def _checkpoint(keys):
         with session() as _s:
@@ -401,26 +397,28 @@ def run(
     status = "completed"
     report_path = None
     summary = ""
-    def _hunt():
+
+    def _hunt(_emit):
         return _run_hunt(
             aid, target=target, message=message, cfg=cfg, client=client,
             sandbox_client=sandbox_client, session_headers=session_headers,
             identity_set=identity_set, login_specs=login_specs,
-            auth_summary=auth_summary, max_turns=max_turns, scope=scope, emit=emit,
+            auth_summary=auth_summary, max_turns=max_turns, scope=scope, emit=_emit,
             done_seed=_done_seed, checkpoint=_checkpoint, detected_tech=detected_tech)
 
     try:
-        if dash is not None:
-            with dash:
-                summary, report_path = _hunt()
+        if _use_tui:
+            from owlforge.engine.tui import run_scan_tui
+            status, summary, report_path = run_scan_tui(aid, target, cfg.llm.model, _hunt)
         else:
-            summary, report_path = _hunt()
+            emit = Emitter(aid, console=console)
+            summary, report_path = _hunt(emit)
     except KeyboardInterrupt:
         status = "stopped"
         console.print("[yellow]interrupted[/]")
     except Exception as e:
         status = "failed"
-        emit("error", f"{type(e).__name__}: {e}")
+        console.print(f"[red]scan error: {type(e).__name__}: {e}[/]")
     finally:
         if sandbox_session:
             manager.stop(sandbox_session, log=sblog)
