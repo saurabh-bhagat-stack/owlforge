@@ -91,10 +91,13 @@ def _render(target, mode, risk, sev, validated, candidates, rejected) -> str:
 
 
 def _finding_block(f: Finding) -> list[str]:
+    from owlforge.report.cvss import cvss
+    _score, _vec = cvss(f.title, f.severity)
     out = [
         "",
         f"### [{f.severity.upper()}] {f.title}",
         f"- Status: {f.status} (confidence: {f.confidence})",
+        f"- CVSS: {_score} `{_vec}`",
     ]
     if f.endpoint:
         out.append(f"- Endpoint: `{f.method or 'GET'} {f.endpoint}`")

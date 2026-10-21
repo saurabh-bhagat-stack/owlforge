@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from sqlmodel import select
 
 from owlforge.config import assessments_dir
+from owlforge.report.cvss import cvss as _cvss
 from owlforge.store.db import session
 from owlforge.store.models import Assessment, Finding
 
@@ -108,6 +109,7 @@ def to_sarif(assessment_id: str) -> tuple[dict, str | None]:
     results: list[dict] = []
     for d in validated:
         cid, cwe, owasp = d["class"]
+        _score, _vector = _cvss(d["title"], d["severity"])
         if cid not in rules:
             tags = [t for t in (cwe, owasp) if t and t != "CWE-0"]
             rules[cid] = {
@@ -115,9 +117,7 @@ def to_sarif(assessment_id: str) -> tuple[dict, str | None]:
                 "name": cid.replace("-", " ").title().replace(" ", ""),
                 "shortDescription": {"text": d["title"]},
                 "properties": {"tags": tags, "cwe": cwe, "owasp": owasp,
-                               "security-severity": {"critical": "9.5", "high": "8.0",
-                                                     "medium": "5.0", "low": "3.0",
-                                                     "info": "1.0"}.get(d["severity"], "5.0")},
+                               "cvss": _vector, "security-severity": str(_score)},
             }
         loc = d["endpoint"] or target
         results.append({
@@ -165,11 +165,13 @@ def _html_finding(d: dict) -> str:
         f'<span class="tag">{_esc(x)}</span>'
         for x in (cwe if cwe != "CWE-0" else "", owasp) if x
     )
+    score, vector = _cvss(d["title"], d["severity"])
     parts = [
         '<section class="finding">',
         (f'<h3><span class="badge" style="background:{color}">'
          f'{_esc(d["severity"].upper())}</span> {_esc(d["title"])}</h3>'),
-        f'<div class="meta">status: {_esc(d["status"])} · confidence: {_esc(d["confidence"])} {tags}</div>',
+        (f'<div class="meta">status: {_esc(d["status"])} · confidence: {_esc(d["confidence"])} '
+         f'· CVSS {score} <code>{_esc(vector)}</code> {tags}</div>'),
     ]
     if d["endpoint"]:
         parts.append(f'<div class="meta">endpoint: <code>{_esc(d["method"])} {_esc(d["endpoint"])}</code></div>')
