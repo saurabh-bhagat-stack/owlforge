@@ -154,8 +154,8 @@ Mapping, not coverage.
   over WS and Blazor Server circuits; Blazor WASM assembly/boot.json → backend API.
 - **M9 — Exploit-chaining + conditional.** Explicit cross-finding chaining
   (creds→auth→IDOR, SSRF→metadata→RCE) — **DONE** (engine/chains.py, non-destructive
-  correlation of validated components). Remaining (best-effort): subdomain/vhost enum
-  (only if scope spans hosts); business-logic abuse (only partially automatable).
+  correlation of validated components). Remaining (best-effort): business-logic abuse
+  (only partially automatable).
 
 Beyond the milestones, also shipped: **browser-driven interactive SPA recon**
 (agentd /map — drives Chromium through SPAs, captures XHR/fetch/websocket + forms),
