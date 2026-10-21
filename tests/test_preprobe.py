@@ -95,3 +95,29 @@ def test_probe_open_redirect_and_crlf():
             return {"status": 200, "headers": {"Location": "/home"}, "body": "ok"}
     assert probe(OPEN_REDIRECT, {"url": "https://t/go", "param": "next"}, Safe())[0] is False
     assert probe(CRLF, {"url": "https://t/go", "param": "next"}, Safe())[0] is False
+
+
+def test_ssrf_probe_splits_open_redirect_from_ssrf():
+    """A URL echoed only in the 3xx Location is an open redirect (medium), not SSRF;
+    a URL merely echoed in the body is not proof of a server-side fetch (no finding)."""
+    from owlforge.engine.preprobe import probe as _probe
+
+    class LocationSB:
+        def http_request(self, method, url, *, params=None, headers=None, body=None, timeout_ms=60_000):
+            p = (params or {})
+            # reflect the supplied URL into Location (classic open redirect)
+            val = next((v for v in p.values() if isinstance(v, str) and v.startswith("http")), "")
+            return {"status": 302, "headers": {"Location": val}, "body": ""}
+
+    ok, note, repro = _probe(SSRF, {"url": "https://t/r", "param": "next"}, LocationSB())
+    assert ok is True
+    assert repro["title"] == "Open redirect" and repro["severity"] == "medium"
+
+    class BodyEchoSB:
+        def http_request(self, method, url, *, params=None, headers=None, body=None, timeout_ms=60_000):
+            p = (params or {})
+            val = next((v for v in p.values() if isinstance(v, str)), "")
+            return {"status": 200, "headers": {}, "body": f"you asked for {val}"}
+
+    # URL only echoed in the body -> NOT a sound SSRF claim (OAST pass confirms real SSRF)
+    assert _probe(SSRF, {"url": "https://t/r", "param": "next"}, BodyEchoSB())[0] is False

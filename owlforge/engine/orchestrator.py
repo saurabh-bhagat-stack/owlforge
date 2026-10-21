@@ -43,7 +43,7 @@ _TITLE = {
     XSS: "reflected cross-site scripting",
     PATH: "path traversal / local file inclusion",
     OBJECT_ID: "broken access control / IDOR",
-    SSRF: "SSRF / open redirect",
+    SSRF: "server-side request forgery (SSRF)",
     CSRF: "cross-site request forgery",
     SSTI: "server-side template injection",
     RCE: "OS command injection / RCE",
@@ -60,7 +60,9 @@ _HINT = {
     XSS: "a unique marker reflected RAW in the response (NOT HTML-encoded &lt;)",
     PATH: "payloads like ../../../../etc/passwd returning file contents (e.g. root:x:0:0)",
     OBJECT_ID: "accessing another object's id, or a forbidden/hidden endpoint, and receiving data you should not",
-    SSRF: "a URL parameter causing a server-side fetch, or an attacker URL reflected in a redirect/Location",
+    SSRF: "the SERVER fetching an attacker-supplied URL (fetched content appears in the response, or an "
+          "out-of-band callback fires). A URL merely echoed in a 3xx Location is OPEN REDIRECT — file it "
+          "under that class, not SSRF",
     CSRF: "a state-changing request still succeeds with the anti-CSRF token omitted/replaced, and no "
           "SameSite cookie or Origin/Referer check blocks a cross-site submission",
     SSTI: "a template expression is evaluated server-side (e.g. {{1337*1337}} -> 1787569); escalate to code/file read",

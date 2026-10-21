@@ -108,6 +108,9 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
         from owlforge.engine.authlogic import jwt_scan
         jwt_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                  log=lambda m: emit("status", m))
+        from owlforge.engine.csrf import csrf_scan
+        csrf_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                  log=lambda m: emit("status", m))
         from owlforge.engine.bizlogic import bizlogic_scan
         bizlogic_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                       log=lambda m: emit("status", m))
@@ -317,7 +320,10 @@ def run(
         except Exception as e:
             console.print(f"[yellow]nuclei failed: {e}[/]")
         if surface_text:
-            console.print(f"[dim]\\[recon] surface inventory:\n{surface_text[:700]}[/]")
+            _inv = surface_text.rstrip()
+            if len(_inv) > 1400:  # cut on a newline so a URL is never sliced in half
+                _inv = _inv[:1400].rsplit("\n", 1)[0] + "\n… (truncated — full inventory in the report)"
+            console.print(f"[dim]\\[recon] surface inventory:\n{_inv}[/]")
     except Exception as e:
         console.print(f"[yellow]recon failed: {e}[/]")
 

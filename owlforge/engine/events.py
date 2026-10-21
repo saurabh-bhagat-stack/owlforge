@@ -29,12 +29,24 @@ class Emitter:
         self.console = console or Console()
         self.persist = persist
         self.quiet = quiet
+        self._last_key: tuple[str, str] | None = None
+        self._dups = 0
 
     def __call__(self, type_: str, message: str, **data) -> None:
         if not self.quiet:
-            label = type_.upper().replace("_", " ")
-            style = _STYLE.get(type_, "white")
-            self.console.print(f"[{style}]\\[{label}][/] {message}")
+            # collapse runs of identical consecutive lines (e.g. repeated recon
+            # crawl lines, or a stuck loop) into a single '(repeated xN)' notice
+            key = (type_, message)
+            if key == self._last_key:
+                self._dups += 1
+            else:
+                if self._dups:
+                    self.console.print(f"[dim]  (last line repeated x{self._dups} more)[/]")
+                    self._dups = 0
+                label = type_.upper().replace("_", " ")
+                style = _STYLE.get(type_, "white")
+                self.console.print(f"[{style}]\\[{label}][/] {message}")
+                self._last_key = key
         if not self.persist:
             return
         try:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 
 from owlforge.engine.events import Emitter
 from owlforge.engine.prompts import system_prompt
@@ -120,7 +121,7 @@ async def run_single_agent(
             if call.name == "create_finding" and "filed as candidate" in result:
                 findings_created += 1
             if tool.name not in {"think", "finish"}:
-                emit("tool_result", f"{tool.name} -> {result[:200]}")
+                emit("tool_result", f"{tool.name} -> {_compact_result(result)}")
             messages.append(Message(role="tool", tool_call_id=call.id, name=call.name,
                                     content=result[:_MAX_TOOL_RESULT]))
             if call.name == "note":
@@ -185,6 +186,31 @@ async def run_single_agent(
     except Exception as e:  # summary is best-effort
         emit("log", f"summary generation failed: {type(e).__name__}: {e}")
     return _finalize(last_summary, notes, actions, emit)
+
+
+def _compact_result(result: str) -> str:
+    """A tidy one-line view of a tool result for the live TUI. The full result still
+    goes to the model; this only shortens what is printed (raw header dumps and
+    multi-KB bodies are noise on screen)."""
+    r = result or ""
+    if r.startswith("status="):
+        status = url = ct = clen = ""
+        for line in r.splitlines():
+            if line.startswith("status="):
+                status = line[len("status="):].strip()
+            elif line.startswith("final_url="):
+                url = line[len("final_url="):].strip()
+            elif line.startswith("headers=") and "content-type" in line.lower():
+                m = re.search(r"content-type[\"\':\s]+([^\"\',}]+)", line, re.I)
+                if m:
+                    ct = m.group(1).split(";")[0].strip()
+                m = re.search(r"content-length[\"\':\s]+(\d+)", line, re.I)
+                if m:
+                    clen = m.group(1) + "B"
+        bits = [b for b in (status, ct, clen) if b]
+        return (" ".join(bits) + (f"  {url}" if url else "")).strip() or r[:200]
+    first = next((ln for ln in r.splitlines() if ln.strip()), "")
+    return (first[:200] + " …") if len(r) > len(first) + 1 else first[:200]
 
 
 _VULN_CLAIM = ("confirmed", "is vulnerable", "injection on", "exploitable",
