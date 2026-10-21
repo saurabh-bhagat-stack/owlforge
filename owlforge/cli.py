@@ -40,6 +40,18 @@ app.add_typer(sandbox_app, name="sandbox")
 console = Console()
 
 
+def _banner() -> None:
+    """Owl splash shown when a scan launches."""
+    art = (
+        "[bold yellow]   ,___,[/]\n"
+        "[bold yellow]   (o,o)[/]   [bold cyan]owlforge[/] [dim]v" + __version__ + "[/]\n"
+        "[bold yellow]   /)_)[/]    [dim]autonomous web-app penetration testing[/]\n"
+        '[bold yellow]    " "[/]    [dim]local-first | model-agnostic | evidence-gated[/]'
+    )
+    console.print(art)
+    console.print()
+
+
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{secrets.token_hex(5)}"
 
@@ -184,6 +196,7 @@ def run(
     import time as _time
     from urllib.parse import urlparse
 
+    _banner()
     cfg = load_config()
     if model:
         cfg = cfg.model_copy(deep=True)
@@ -343,6 +356,7 @@ def run(
 
     status = "completed"
     report_path = None
+    summary = ""
     try:
         summary, report_path = _run_hunt(
             aid, target=target, message=message, cfg=cfg, client=client,
