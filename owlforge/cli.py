@@ -161,6 +161,7 @@ def run(
 
     user_auth = AuthContext(mode="unauth")
     identity_set = None
+    login_specs: list[dict] = []
     if identities:
         from owlforge.engine.identities import establish_all, load_identities, primary_identity
 
@@ -195,6 +196,10 @@ def run(
                 user_auth = AuthContext(mode="session", headers=_prim.session_headers)
             identity_set = [{"label": i.label, "role": i.role, "headers": i.session_headers}
                             for i in _idents if i.session_headers or i.role == "anonymous"]
+            login_specs = [{"url": (i.auth or {}).get("url"), "data": (i.auth or {}).get("data", ""),
+                            "success": (i.auth or {}).get("success", "")}
+                           for i in _idents if (i.auth or {}).get("type") == "login"
+                           and (i.auth or {}).get("url")]
         except Exception as e:
             console.print(f"[yellow]identities load failed: {e}[/]")
 
@@ -278,6 +283,8 @@ def run(
             from owlforge.engine.sessionlogic import session_scan
             session_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                          log=lambda m: emit("status", m))
+            from owlforge.engine.sessionfix import session_fixation_scan
+            session_fixation_scan(aid, sandbox_client, login_specs, log=lambda m: emit("status", m))
             from owlforge.engine.protopoll import proto_pollution_scan
             proto_pollution_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                                  log=lambda m: emit("status", m))

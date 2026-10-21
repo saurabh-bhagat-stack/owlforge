@@ -64,12 +64,12 @@ class SandboxClient:
             return []
 
     def http_request(self, method, url, *, headers=None, params=None, body=None,
-                     timeout_ms: int = 30_000) -> dict:
+                     follow_redirects: bool = True, timeout_ms: int = 30_000) -> dict:
         r = httpx.post(
             f"{self.base_url}/http",
             headers=self._headers(),
             json={"method": method, "url": url, "headers": headers, "params": params,
-                  "body": body, "timeout_ms": timeout_ms},
+                  "body": body, "follow_redirects": follow_redirects, "timeout_ms": timeout_ms},
             timeout=max(self.timeout, timeout_ms / 1000 + 10),
         )
         r.raise_for_status()

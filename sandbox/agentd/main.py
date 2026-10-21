@@ -165,6 +165,7 @@ def http_request(req: HttpRequest) -> dict:
             "status": r.status_code,
             "final_url": str(r.url),
             "headers": dict(r.headers),
+            "set_cookie": list(r.headers.get_list("set-cookie")),  # raw, un-collapsed
             "body": r.text[:MAX_OUTPUT],
             "elapsed_ms": int(r.elapsed.total_seconds() * 1000),
         }
