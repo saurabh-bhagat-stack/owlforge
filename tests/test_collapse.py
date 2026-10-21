@@ -107,3 +107,35 @@ def test_candidate_dup_of_validated_is_collapsed_not_rejected(tmp_path, monkeypa
         det = s.get(Finding, "det0")
     assert llm.status == "duplicate"
     assert det.status == "validated"
+
+
+def test_skip_ids_examines_each_candidate_once(tmp_path, monkeypatch):
+    """Eager validation calls validate_findings repeatedly; a candidate that stays
+    'candidate' (passive) must be examined once, not re-logged every call."""
+    import asyncio
+
+    db = _db(tmp_path, monkeypatch)
+    from owlforge.store.models import Finding
+    with db.session() as s:
+        s.add(Finding(id="p0", assessment_id="a", title="Missing HSTS", severity="low",
+                      status="candidate", endpoint="/",
+                      validation_note="passive observation (deterministic)"))
+        s.commit()
+
+    from owlforge.engine.events import Emitter
+    from owlforge.engine.validate import validate_findings
+
+    seen = {"manual": 0}
+
+    class Em(Emitter):
+        def __call__(self, type_, message, **data):
+            if "manual-review" in message:
+                seen["manual"] += 1
+
+    em = Em("a", persist=False)
+    examined: set[str] = set()
+    for _ in range(3):  # three eager passes
+        asyncio.run(validate_findings(assessment_id="a", sandbox=None, emit=em,
+                                      skip_ids=examined))
+    assert seen["manual"] == 1          # logged once, not three times
+    assert "p0" in examined

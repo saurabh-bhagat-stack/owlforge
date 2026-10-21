@@ -24,16 +24,23 @@ _STYLE = {
 
 class Emitter:
     def __init__(self, assessment_id: str, console: Console | None = None, persist: bool = True,
-                 quiet: bool = False) -> None:
+                 quiet: bool = False, dashboard=None) -> None:
         self.assessment_id = assessment_id
         self.console = console or Console()
         self.persist = persist
         self.quiet = quiet
+        self.dashboard = dashboard
         self._last_key: tuple[str, str] | None = None
         self._dups = 0
 
     def __call__(self, type_: str, message: str, **data) -> None:
-        if not self.quiet:
+        if self.dashboard is not None:
+            # live dashboard owns the screen -> feed it instead of printing lines
+            try:
+                self.dashboard.handle(type_, message)
+            except Exception:
+                pass
+        elif not self.quiet:
             # collapse runs of identical consecutive lines (e.g. repeated recon
             # crawl lines, or a stuck loop) into a single '(repeated xN)' notice
             key = (type_, message)

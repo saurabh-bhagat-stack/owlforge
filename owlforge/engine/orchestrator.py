@@ -236,6 +236,7 @@ async def run_orchestrated(
     operator_message: str = "",
     done_seed=None,
     checkpoint=None,
+    validate_cb=None,
 ) -> str:
     registry = build_registry(with_sandbox=sandbox is not None)
     done_keys: set = {tuple(k) for k in (done_seed or [])}
@@ -319,6 +320,11 @@ async def run_orchestrated(
                     checkpoint(done_keys)
                 except Exception:
                     pass
+            if validate_cb is not None:
+                try:
+                    await validate_cb()  # confirm this specialist's findings now, not at the end
+                except Exception as e:
+                    emit("log", f"eager validation failed: {type(e).__name__}: {e}")
             ran.append(cls)
             ran_this_round += 1
         if ran_this_round == 0:

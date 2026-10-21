@@ -84,13 +84,20 @@ async def validate_findings(
     *, assessment_id: str, sandbox: SandboxClient | None, emit: Emitter,
     session_headers: dict | None = None,
     identities: list[dict] | None = None,
+    skip_ids: set[str] | None = None,
 ) -> dict[str, int]:
+    # skip_ids lets incremental (eager) validation examine each candidate once: findings
+    # that stay 'candidate' (passive/manual/needs-differential) are not re-probed or
+    # re-logged on every call.
     with session() as s:
         rows = s.exec(
             select(Finding).where(
                 Finding.assessment_id == assessment_id, Finding.status == "candidate"
             )
         ).all()
+        if skip_ids is not None:
+            rows = [f for f in rows if f.id not in skip_ids]
+            skip_ids.update(f.id for f in rows)
         items = [(f.id, f.repro_command, f.success_signal, f.title,
                   f.repro_method, f.repro_url, dict(f.repro_params or {}), f.repro_body,
                   f.repro_content_type, f.validation_note, f.endpoint) for f in rows]
