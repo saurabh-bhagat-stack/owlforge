@@ -33,6 +33,30 @@ milestone build order live in [`WORKFLOW.md`](WORKFLOW.md); the recon design in
 
 ## 2. High-level architecture
 
+```mermaid
+flowchart LR
+  CLI["owlforge run &lt;target&gt;"] --> RECON
+  subgraph ENGINE["engine (Python, host)"]
+    RECON["recon<br/>crawl · SPA map · katana · ffuf · nuclei · WAF"]
+    --> UND["understand<br/>secrets · JS→API"]
+    --> AUTH["auth<br/>login-harvest · identities · SSO"]
+    --> PLAN["plan<br/>classify + pre-probe (auto-file)"]
+    --> HUNT["specialists<br/>SQLi XSS SSRF SSTI RCE XXE … + bypass"]
+    --> OAST["OAST<br/>blind SSRF/XXE"]
+    --> AC["access-control<br/>IDOR · privesc · missing-authn"]
+    --> AL["auth-logic<br/>JWT alg=none · weak secret"]
+    --> VAL["validate<br/>evidence-gated · browser-exec XSS"]
+    --> REP["collapse · dedupe · chain<br/>report (md / html / sarif, CVSS)"]
+  end
+  ENGINE -->|"HTTP, bearer, 127.0.0.1"| SB
+  subgraph SB["owlforge-sandbox (Docker, per run)"]
+    AGENTD["owlforge-agentd (FastAPI)<br/>/exec /http /render /map /xss_check<br/>/interact /oast/* /ws_probe /smuggle_probe"]
+    TOOLS["mitmproxy · Playwright Chromium<br/>nmap httpx nuclei ffuf katana wafw00f interactsh cloudflared"]
+  end
+  ENGINE --> STORE[("SQLite<br/>assessments · surface · findings · attempts · events")]
+```
+
+
 ```
 +---------------------------------------------------------------+
 |  owlforge engine  (Python, host process)                      |

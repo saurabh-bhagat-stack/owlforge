@@ -1,0 +1,47 @@
+# Role-labelled identities for multi-user access-control / IDOR testing.
+#   owlforge run <target> --identities examples/identities.yaml
+# An implicit "unauth" (anonymous) identity is always added automatically, so the
+# access-control scan can prove "protected resource reachable anonymously".
+# Give TWO real user accounts to catch horizontal IDOR/BOLA, and an admin to catch
+# vertical privilege escalation.
+
+identities:
+  # a plain cookie session (copy the Cookie header value from your browser)
+  - label: alice
+    role: user
+    auth:
+      type: cookie
+      cookie: "session=PASTE_ALICES_SESSION_COOKIE"
+
+  # a second user — needed to prove one user can read another user's objects
+  - label: bob
+    role: user
+    auth:
+      type: cookie
+      cookie: "session=PASTE_BOBS_SESSION_COOKIE"
+
+  # form login (owlforge submits the form and keeps the session); optional TOTP
+  - label: carol
+    role: user
+    auth:
+      type: login
+      url: "https://app.example/login"
+      data: "username=carol&password=Passw0rd!"
+      success: "My account"          # substring proving login worked
+      # totp_secret: "JBSWY3DPEHPK3PXP"   # base32 TOTP seed (optional)
+      # totp_field: "otp"                  # form field for the OTP (default: otp)
+
+  # a bearer token (API / JWT)
+  - label: admin
+    role: admin
+    auth:
+      type: header
+      header: "Authorization: Bearer PASTE_ADMIN_TOKEN"
+
+  # SSO / MFA you complete by hand in the sandbox browser (noVNC); owlforge captures
+  # the resulting session. Needs the sandbox.
+  # - label: sso-user
+  #   role: user
+  #   auth:
+  #     type: sso
+  #     url: "https://app.example/sso/login"

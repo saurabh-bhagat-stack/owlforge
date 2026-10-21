@@ -11,6 +11,8 @@ Original work — its own architecture and engine, built from the ground up.
 > ⚠️ **Status: active development.** The engine works end to end on real targets;
 > interfaces and schema still change. **Only test systems you are authorized to assess.**
 
+> **Usage guide:** worked examples (authenticated IDOR, OAST config, reading results) are in [docs/USAGE.md](docs/USAGE.md).
+
 ## Why local-first
 owlforge is built to be driven by a **local** model (any OpenAI-compatible endpoint —
 Ollama / Jan / LM Studio / llama.cpp). Designing for a modest local model forces a robust,
@@ -131,6 +133,7 @@ owlforge assessments show <id>
 owlforge findings <id>             # findings for an assessment
 owlforge report <id>               # markdown report (--rebuild to regenerate)
 owlforge report <id> --format html # also HTML + SARIF; md|html|sarif|all
+owlforge diff   <id>               # NEW / FIXED / PERSISTING vs the previous run
 owlforge sandbox status            # docker + image state
 ```
 
