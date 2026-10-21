@@ -233,19 +233,96 @@ def parse_ollama_context(data: dict) -> int | None:
     return min(vals)
 
 
-def detect_context_window(base_url: str, model: str) -> int | None:
-    """Best-effort: ask the provider (Ollama) for the model's served context. None if unknown."""
-    if not model:
-        return None
-    try:
-        import httpx
+# known context windows for common hosted/frontier models (substring match on the id),
+# so auto-detect works for cloud models whose API doesn't report a context length.
+_KNOWN_CONTEXT: list[tuple[tuple[str, ...], int]] = [
+    (("gpt-4o", "gpt-4.1", "gpt-4-turbo", "o1", "o3", "o4"), 128000),
+    (("gpt-4",), 8192),
+    (("gpt-3.5",), 16385),
+    (("claude",), 200000),
+    (("gemini-1.5", "gemini-2", "gemini-pro"), 1048576),
+    (("llama-3.1", "llama3.1", "llama-3.3", "llama3.3"), 131072),
+    (("llama-3", "llama3"), 8192),
+    (("mixtral",), 32768),
+    (("qwen2.5", "qwen3", "qwen-2.5"), 32768),
+    (("glm-4", "glm4"), 131072),
+    (("deepseek",), 65536),
+    (("command-r",), 128000),
+]
 
-        r = httpx.post(f"{_ollama_root(base_url)}/api/show", json={"model": model}, timeout=5.0)
-        if r.status_code != 200:
-            return None
-        return parse_ollama_context(r.json())
-    except Exception:
+
+def _known_context(model: str) -> int | None:
+    m = (model or "").lower()
+    for keys, ctx in _KNOWN_CONTEXT:
+        if any(k in m for k in keys):
+            return ctx
+    return None
+
+
+def _openai_models_context(base_url: str, model: str) -> int | None:
+    """OpenAI-compatible GET {base_url}/models — vLLM/llama.cpp sometimes report the length."""
+    import httpx
+    r = httpx.get(f"{base_url.rstrip('/')}/models", timeout=5.0)
+    if r.status_code != 200:
         return None
+    data = (r.json() or {}).get("data") or []
+    for m in data:
+        mid = str(m.get("id", ""))
+        if not (mid == model or (model and model in mid) or (mid and mid in (model or ""))):
+            continue
+        for k in ("context_length", "max_model_len", "max_context_length", "n_ctx",
+                  "context_window"):
+            v = m.get(k)
+            if isinstance(v, int) and v > 0:
+                return v
+        meta = m.get("meta") or {}
+        for k in ("n_ctx_train", "context_length", "n_ctx"):
+            v = meta.get(k)
+            if isinstance(v, int) and v > 0:
+                return v
+    return None
+
+
+def _llamacpp_props_context(base_url: str) -> int | None:
+    """llama.cpp /props exposes the served context (n_ctx)."""
+    import httpx
+    root = base_url.rstrip("/")
+    if root.endswith("/v1"):
+        root = root[:-3]
+    r = httpx.get(f"{root}/props", timeout=5.0)
+    if r.status_code != 200:
+        return None
+    j = r.json() or {}
+    dgs = j.get("default_generation_settings") or {}
+    for v in (dgs.get("n_ctx"), j.get("n_ctx"), dgs.get("n_ctx_train")):
+        if isinstance(v, int) and v > 0:
+            return v
+    return None
+
+
+def detect_context_window(base_url: str, model: str) -> int | None:
+    """Best-effort, provider-agnostic: Ollama -> OpenAI-compatible /models -> llama.cpp
+    /props -> a known-model table (covers hosted/frontier). None if nothing matches."""
+    if not model and not base_url:
+        return None
+    import httpx
+    try:
+        r = httpx.post(f"{_ollama_root(base_url)}/api/show", json={"model": model}, timeout=5.0)
+        if r.status_code == 200:
+            v = parse_ollama_context(r.json())
+            if v:
+                return v
+    except Exception:
+        pass
+    for fn in (lambda: _openai_models_context(base_url, model),
+               lambda: _llamacpp_props_context(base_url)):
+        try:
+            v = fn()
+            if v:
+                return v
+        except Exception:
+            pass
+    return _known_context(model)
 
 
 def resolve_context_window(cfg) -> tuple[int, str]:
