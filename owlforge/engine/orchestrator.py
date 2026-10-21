@@ -237,6 +237,7 @@ async def run_orchestrated(
     done_seed=None,
     checkpoint=None,
     validate_cb=None,
+    detected_tech=None,
 ) -> str:
     registry = build_registry(with_sandbox=sandbox is not None)
     done_keys: set = {tuple(k) for k in (done_seed or [])}
@@ -303,6 +304,8 @@ async def run_orchestrated(
                 "and success_signal (text present ONLY when vulnerable, e.g. 500). Then call finish. Do not "
                 "file what you cannot reproduce." + hint
             )
+            from owlforge.engine.knowledge import select_knowledge
+            instr += select_knowledge(cls, detected_tech, inventory)
             try:
                 await run_single_agent(
                     client=client, registry=registry, emit=emit, assessment_id=assessment_id,
