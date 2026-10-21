@@ -196,7 +196,7 @@ def run(
 
     # deep-by-default: everything thorough, no knobs to dumb it down
     recon_pages = 40
-    max_turns = 24
+    max_turns = 30
 
     # auto project name: <host>-<shorthash> so repeat scans of a domain segregate
     host = urlparse(target).netloc or target
