@@ -265,6 +265,9 @@ def run(
             from owlforge.engine.bizlogic import bizlogic_scan
             bizlogic_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                           log=lambda m: emit("status", m))
+            from owlforge.engine.sessionlogic import session_scan
+            session_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                         log=lambda m: emit("status", m))
         except Exception as e:
             emit("log", f"stored pass failed: {type(e).__name__}: {e}")
         emit("status", "validation phase")
