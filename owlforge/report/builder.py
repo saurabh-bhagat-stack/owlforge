@@ -109,6 +109,8 @@ def _finding_block(f: Finding) -> list[str]:
         out += ["", "**Proof of concept**", "", "```", f.proof_of_concept, "```"]
     if f.repro_command:
         out += ["", "**Reproduction**", "", "```", f.repro_command, "```"]
+    if getattr(f, "evidence", ""):
+        out += ["", "**Evidence (request / response)**", "", "```", (f.evidence or "")[:1500], "```"]
     if f.impact:
         out += ["", "**Impact**", "", f.impact]
     if f.remediation:

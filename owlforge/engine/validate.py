@@ -157,9 +157,18 @@ async def validate_findings(
                     body=(rbody or None), headers=hdrs
                 )
                 out = f"{d.get('status', '')}\n{d.get('headers', '')}\n{d.get('body', '') or ''}".lower()
+                _hdrs = "\n".join(f"{k}: {v}" for k, v in list((d.get("headers") or {}).items())[:8])
+                evidence = (f"--- request ---\n{rmethod or 'GET'} {rurl}"
+                            + (f"\nparams={params}" if params else "")
+                            + (f"\ncontent-type: {rct}" if rct else "")
+                            + (f"\nbody={(rbody or '')[:300]}" if rbody else "")
+                            + f"\n\n--- response ---\nHTTP {d.get('status', '')}\n{_hdrs}\n\n"
+                            + (d.get("body") or "")[:800])
             else:
                 r = await asyncio.to_thread(sandbox.exec, repro, timeout_ms=60_000)
                 out = f"{r.stdout}\n{r.stderr}".lower()
+                evidence = (f"--- command ---\n{repro}\n\n--- output ---\n"
+                            + (r.stdout or "")[:800] + ("\n" + (r.stderr or "")[:300] if r.stderr else ""))
             sig = signal.strip()
             if not sig:
                 reproduced, reason = (r.exit_code == 0), "exit 0 (no signal supplied)"
@@ -178,7 +187,8 @@ async def validate_findings(
             counts["manual"] += 1
             continue
         if reproduced:
-            _set(fid, "validated", confidence="high", note=f"reproduced: {reason}")
+            _set(fid, "validated", confidence="high", note=f"reproduced: {reason}",
+                 evidence=evidence)
             counts["validated"] += 1
             emit("finding_validated", f"VALIDATED: {title}")
         else:
@@ -272,7 +282,8 @@ async def _differential_access(
     return ("inconclusive", f"anonymous status {n_status}; content differs — manual review")
 
 
-def _set(finding_id: str, status: str, *, confidence: str | None = None, note: str = "") -> None:
+def _set(finding_id: str, status: str, *, confidence: str | None = None, note: str = "",
+         evidence: str = "") -> None:
     from datetime import datetime
 
     with session() as s:
@@ -284,6 +295,8 @@ def _set(finding_id: str, status: str, *, confidence: str | None = None, note: s
             f.confidence = confidence
         if note:
             f.validation_note = note
+        if evidence:
+            f.evidence = evidence
         f.updated_at = datetime.now(UTC)
         s.add(f)
         s.commit()

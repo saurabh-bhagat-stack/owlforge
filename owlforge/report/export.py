@@ -80,6 +80,7 @@ def _findings(assessment_id: str):
             "analysis": f.technical_analysis or "", "poc": f.proof_of_concept or "",
             "repro": f.repro_command or "", "impact": f.impact or "",
             "remediation": f.remediation or "", "note": f.validation_note or "",
+            "evidence": getattr(f, "evidence", "") or "",
             "class": classify_finding(f),
         } for f in rows]
     return target, mode, data
@@ -182,6 +183,9 @@ def _html_finding(d: dict) -> str:
     for label, key in (("Proof of concept", "poc"), ("Reproduction", "repro")):
         if d[key]:
             parts.append(f'<p><strong>{label}</strong></p><pre>{_esc(d[key])}</pre>')
+    if d["evidence"]:
+        parts.append(f'<p><strong>Evidence (request / response)</strong></p>'
+                     f'<pre>{_esc(d["evidence"][:1500])}</pre>')
     if d["impact"]:
         parts.append(f'<p><strong>Impact.</strong> {_esc(d["impact"])}</p>')
     if d["remediation"]:
