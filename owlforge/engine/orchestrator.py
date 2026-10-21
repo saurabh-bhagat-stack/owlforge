@@ -157,6 +157,27 @@ def _targets_text(targets: list[dict], limit: int = 30) -> str:
     return "\n".join(lines)
 
 
+def _surface_with_pivots(targets: list[dict], inventory: list[dict], limit: int = 20) -> str:
+    """Primary targets + a capped list of OTHER discovered endpoints the specialist may pivot
+    to (so it can explore related endpoints, not only the params it was handed)."""
+    primary = _targets_text(targets)
+    tkeys = {(t.get("method"), t.get("url")) for t in targets}
+    others, seen = [], set()
+    for it in inventory:
+        k = (it.get("method"), it.get("url"))
+        if k in tkeys or k in seen or not it.get("url"):
+            continue
+        seen.add(k)
+        params = ", ".join(it.get("params") or []) or "-"
+        others.append(f"- {it.get('method', 'GET')} {it['url']}  params: {params}")
+        if len(others) >= limit:
+            break
+    if not others:
+        return primary
+    return (primary + "\n\n# Other discovered endpoints (pivot here if plausibly relevant):\n"
+            + "\n".join(others))
+
+
 def _repro_location(repro: dict) -> dict:
     """Map a probe repro to the Finding's repro fields: a body payload (POST/PUT/XML/JSON)
     goes to repro_body + repro_content_type; a query payload goes to repro_params."""
@@ -266,8 +287,10 @@ async def run_orchestrated(
                    f"constraints):\n{operator_message.strip()}\n\n") if operator_message.strip() else "")
             instr = (
                 op
-                + f"You are a {_TITLE[cls]} specialist. Test ONLY for {_TITLE[cls]} on the targets below — "
-                f"nothing else. Signal of success: {_HINT[cls]}. Use http_request (put RAW payloads in "
+                + f"You are a {_TITLE[cls]} specialist. Focus on {_TITLE[cls]}. Test the PRIMARY targets "
+                f"below first; you MAY ALSO probe other discovered endpoints (listed under 'Other discovered "
+                f"endpoints') when they look plausibly {_TITLE[cls]}-relevant — but do not test unrelated "
+                f"classes. Signal of success: {_HINT[cls]}. Use http_request (put RAW payloads in "
                 f"params; do not url-encode); you may also use exec_command (curl, ffuf, nuclei, the sandbox "
                 f"toolkit) when a request is filtered. Test each target's parameter. The moment you CONFIRM "
                 "an issue, call create_finding with severity, a proof_of_concept, and a STRUCTURED repro: "
@@ -279,7 +302,8 @@ async def run_orchestrated(
                 await run_single_agent(
                     client=client, registry=registry, emit=emit, assessment_id=assessment_id,
                     target=target, instructions=instr, scan_mode=scan_mode, max_turns=max_turns,
-                    sandbox=sandbox, session_headers=session_headers, surface=_targets_text(targets),
+                    sandbox=sandbox, session_headers=session_headers,
+                    surface=_surface_with_pivots(targets, inventory),
                     expected_signal="; ".join(probe_notes[:4]),
                 )
             except Exception as e:
