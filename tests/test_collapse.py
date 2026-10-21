@@ -1,0 +1,47 @@
+"""Passive-finding site-wide collapse."""
+from __future__ import annotations
+
+
+def _db(tmp_path, monkeypatch):
+    import owlforge.config as config
+    import owlforge.store.db as db
+    monkeypatch.setenv("OWLFORGE_HOME", str(tmp_path))
+    config.load_config.cache_clear()
+    db._engine = None
+    db.init_db()
+    return db
+
+
+def _seed(db):
+    from owlforge.store.models import Finding
+    with db.session() as s:
+        # same passive issue across 3 endpoints + a distinct passive issue + a real finding
+        for i, ep in enumerate(["/", "/catalog", "/blog"]):
+            s.add(Finding(id=f"csp{i}", assessment_id="a", title="Missing Content-Security-Policy",
+                          severity="low", status="candidate", endpoint=ep,
+                          validation_note="passive observation (deterministic)"))
+        s.add(Finding(id="hsts0", assessment_id="a", title="Missing HSTS", severity="low",
+                      status="candidate", endpoint="/", validation_note="passive observation (deterministic)"))
+        s.add(Finding(id="sqli0", assessment_id="a", title="SQL injection", severity="high",
+                      status="validated", endpoint="/catalog", validation_note="reproduced"))
+        s.commit()
+
+
+def test_collapse_merges_same_title_passive(tmp_path, monkeypatch):
+    db = _db(tmp_path, monkeypatch)
+    _seed(db)
+    from sqlmodel import select
+
+    from owlforge.engine.validate import collapse_passive_findings
+    from owlforge.store.models import Finding
+    n = collapse_passive_findings("a")
+    assert n == 2  # two of the three CSP rows collapsed
+    with db.session() as s:
+        rows = {f.id: f for f in s.exec(select(Finding).where(Finding.assessment_id == "a")).all()}
+    csp_live = [f for f in rows.values() if f.title == "Missing Content-Security-Policy"
+                and f.status == "candidate"]
+    assert len(csp_live) == 1
+    kept = csp_live[0]
+    assert "site-wide" in kept.endpoint and "Affected endpoints (3)" in kept.technical_analysis
+    assert rows["hsts0"].status == "candidate"   # distinct passive issue untouched
+    assert rows["sqli0"].status == "validated"   # real finding untouched

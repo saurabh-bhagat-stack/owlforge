@@ -318,6 +318,48 @@ _STATUS_RANK = {"validated": 3, "candidate": 2, "false_positive": 1, "duplicate"
 _SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 
 
+def collapse_passive_findings(assessment_id: str, emit: Emitter | None = None) -> int:
+    """Collapse per-endpoint passive/config findings (Missing CSP, HSTS, cookie flags, ...)
+    into ONE site-wide finding per issue that lists the affected endpoints. A missing header
+    is normally a site-wide config problem; reporting it once per page is just noise. Only
+    deterministic passive observations are collapsed (never injection/per-object findings)."""
+    from sqlmodel import select
+
+    collapsed = 0
+    with session() as s:
+        rows = s.exec(select(Finding).where(
+            Finding.assessment_id == assessment_id, Finding.status == "candidate")).all()
+        passive = [f for f in rows if "passive observation" in (f.validation_note or "").lower()]
+        groups: dict[str, list] = {}
+        for f in passive:
+            groups.setdefault((f.title or "").strip().lower(), []).append(f)
+        for group in groups.values():
+            if len(group) < 2:
+                continue
+            group.sort(key=lambda f: f.id)
+            keep = group[0]
+            eps = []
+            for f in group:
+                ep = f.endpoint or ""
+                if ep and ep not in eps:
+                    eps.append(ep)
+            keep.endpoint = f"(site-wide: {len(eps)} endpoint(s))"
+            shown = ", ".join(eps[:20]) + (" …" if len(eps) > 20 else "")
+            keep.technical_analysis = ((keep.technical_analysis or "").split("\nAffected")[0].rstrip()
+                                       + f"\nAffected endpoints ({len(eps)}): {shown}")
+            s.add(keep)
+            for dup in group[1:]:
+                dup.status = "duplicate"
+                dup.validation_note = (dup.validation_note or "") + f" [site-wide: see {keep.id}]"
+                s.add(dup)
+                collapsed += 1
+        if collapsed:
+            s.commit()
+    if collapsed and emit is not None:
+        emit("status", f"collapse — merged {collapsed} per-endpoint config finding(s) site-wide")
+    return collapsed
+
+
 def dedupe_findings(assessment_id: str, emit: Emitter | None = None) -> int:
     """Collapse overlapping findings (same class + endpoint + method + params) to the
     single best instance (validated > candidate > false_positive, then higher severity);

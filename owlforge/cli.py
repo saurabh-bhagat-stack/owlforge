@@ -279,7 +279,8 @@ def run(
                 emit("log", f"deepen phase failed: {e}")
         emit("status", f"validation — {vcounts['validated']} validated, "
                        f"{vcounts['rejected']} rejected, {vcounts['manual']} manual")
-        from owlforge.engine.validate import dedupe_findings
+        from owlforge.engine.validate import collapse_passive_findings, dedupe_findings
+        collapse_passive_findings(aid, emit)
         dedupe_findings(aid, emit)
         try:
             from owlforge.engine.chains import correlate_chains
@@ -398,6 +399,39 @@ def report(
         fp = d / name
         if fp.exists():
             console.print(f"[dim]written: {fp}[/]")
+
+
+@app.command()
+def diff(
+    assessment_id: str,
+    against: str = typer.Option(None, "--against", help="Compare to this assessment id "
+                                "(default: the previous run of the same project/target)."),
+) -> None:
+    """Show what changed vs a previous scan: new / fixed / still-present findings."""
+    init_db()
+    from sqlmodel import select
+
+    from owlforge.report.diff import diff_findings, previous_assessment_id
+    with session() as s:
+        cur_asmt = s.get(Assessment, assessment_id)
+        if not cur_asmt:
+            console.print(f"[red]No such assessment: {assessment_id}[/]")
+            raise typer.Exit(1)
+        prev_id = against or previous_assessment_id(cur_asmt)
+        if not prev_id:
+            console.print("[yellow]No previous assessment of this project/target to diff against.[/]")
+            raise typer.Exit(0)
+        current = list(s.exec(select(Finding).where(Finding.assessment_id == assessment_id)).all())
+        previous = list(s.exec(select(Finding).where(Finding.assessment_id == prev_id)).all())
+    d = diff_findings(current, previous)
+    console.print(f"[bold]diff[/] {assessment_id} vs {prev_id}")
+    for label, color, items in (("NEW", "red", d["new"]),
+                                ("FIXED", "green", d["fixed"]),
+                                ("PERSISTING", "yellow", d["persisting"])):
+        console.print(f"[{color}]{label} ({len(items)})[/]")
+        for title, ep in items:
+            console.print(f"   • {title}" + (f"  [dim]{ep}[/]" if ep else ""))
+
 
 @sandbox_app.command("build")
 def sandbox_build() -> None:
