@@ -40,15 +40,32 @@ app.add_typer(sandbox_app, name="sandbox")
 console = Console()
 
 
+_WORDMARK = r"""
+ ██████╗ ██╗    ██╗██╗     ███████╗ ██████╗ ██████╗  ██████╗ ███████╗
+██╔═══██╗██║    ██║██║     ██╔════╝██╔═══██╗██╔══██╗██╔════╝ ██╔════╝
+██║   ██║██║ █╗ ██║██║     █████╗  ██║   ██║██████╔╝██║  ███╗█████╗
+██║   ██║██║███╗██║██║     ██╔══╝  ██║   ██║██╔══██╗██║   ██║██╔══╝
+╚██████╔╝╚███╔███╔╝███████╗██║     ╚██████╔╝██║  ██║╚██████╔╝███████╗
+ ╚═════╝  ╚══╝╚══╝ ╚══════╝╚═╝      ╚═════╝ ╚═╝  ╚═╝ ╚═════╝ ╚══════╝"""
+
+
 def _banner() -> None:
-    """Owl splash shown when a scan launches."""
-    art = (
-        "[bold yellow]   ,___,[/]\n"
-        "[bold yellow]   (o,o)[/]   [bold cyan]owlforge[/] [dim]v" + __version__ + "[/]\n"
-        "[bold yellow]   /)_)[/]    [dim]autonomous web-app penetration testing[/]\n"
-        '[bold yellow]    " "[/]    [dim]local-first | model-agnostic | evidence-gated[/]'
-    )
-    console.print(art)
+    """Splash shown when a scan launches."""
+    from rich.text import Text
+    console.print(Text(_WORDMARK, style="bold cyan"), highlight=False)
+    sub = Text()
+    sub.append("  ,___,  ", style="yellow")
+    sub.append("autonomous web-app penetration testing", style="white")
+    sub.append("   v" + __version__, style="dim")
+    tag = Text()
+    tag.append("  (o,o)  ", style="yellow")
+    tag.append("local-first", style="green")
+    tag.append(" · ", style="dim")
+    tag.append("model-agnostic", style="green")
+    tag.append(" · ", style="dim")
+    tag.append("evidence-gated", style="green")
+    console.print(sub)
+    console.print(tag)
     console.print()
 
 
@@ -204,6 +221,10 @@ def run(
     network_recon: bool = typer.Option(
         False, "--network-recon",
         help="Also run port/service discovery (nmap) — opt-in (broader authorization)."),
+    dashboard_ui: bool = typer.Option(
+        False, "--dashboard", "-D",
+        help="Live full-screen dashboard (snapshot view). Default: the scrollable "
+             "streaming log, which you can scroll in your terminal."),
 ) -> None:
     """Run a deep assessment against TARGET. Thorough by default — recon, interactive SPA
     mapping, pre-probe, specialists, validation, and reporting all run automatically."""
@@ -360,7 +381,7 @@ def run(
     detected_tech = [t.strip() for t in _tm.group(1).split(",")] if _tm else []
     detected_tech = [t for t in detected_tech if t and t != "?"]
     dash = None
-    if console.is_terminal:
+    if dashboard_ui and console.is_terminal:
         from owlforge.engine.dashboard import Dashboard
         dash = Dashboard(aid, target, cfg.llm.model, console)
     emit = Emitter(aid, console=console, dashboard=dash)

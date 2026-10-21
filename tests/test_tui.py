@@ -48,4 +48,4 @@ def test_banner_renders_wordmark():
     cli.console = Console(file=buf, width=80, no_color=True)
     cli._banner()
     out = buf.getvalue()
-    assert "owlforge" in out and __version__ in out
+    assert __version__ in out and "penetration testing" in out  # wordmark art + subtitle
