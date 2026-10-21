@@ -100,6 +100,16 @@ class SandboxClient:
         r.raise_for_status()
         return r.json()
 
+    def proto_check(self, url: str, probe: str, *, headers: dict | None = None,
+                    timeout_ms: int = 15_000) -> dict:
+        """Client-side prototype-pollution check in real Chromium."""
+        r = httpx.post(f"{self.base_url}/proto_check", headers=self._headers(),
+                       json={"url": url, "probe": probe, "headers": headers,
+                             "timeout_ms": timeout_ms},
+                       timeout=max(self.timeout, timeout_ms / 1000 + 15))
+        r.raise_for_status()
+        return r.json()
+
     def oast_start(self, provider: str = "interactsh", *, server: str = "", token: str = "",
                    ngrok_token: str = "") -> dict:
         """Start a persistent OAST provider (interactsh or tunnel) as a managed subprocess."""

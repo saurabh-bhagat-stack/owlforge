@@ -824,6 +824,52 @@ def oast_stop() -> dict:
     return {"stopped": True}
 
 
+class ProtoCheckRequest(BaseModel):
+    url: str
+    probe: str
+    headers: dict[str, str] | None = None
+    wait_until: str = "load"
+    timeout_ms: int = 15_000
+
+
+@app.post("/proto_check", dependencies=[Depends(auth)])
+async def proto_check(req: ProtoCheckRequest) -> dict:
+    """Client-side prototype-pollution check. The caller loads a URL carrying a payload like
+    ?__proto__[<probe>]=owlPOLLUTED; we render it in real Chromium and report whether the
+    page's JS polluted Object.prototype (i.e. Object.prototype[<probe>] === the sentinel).
+    Deterministic — only a genuine pollution sink sets the property."""
+    try:
+        from playwright.async_api import async_playwright
+    except Exception as e:
+        return {"error": f"playwright unavailable: {e}"}
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+            context = await browser.new_context(extra_http_headers=req.headers or {},
+                                                ignore_https_errors=True)
+            page = await context.new_page()
+            try:
+                await page.goto(req.url, wait_until=req.wait_until, timeout=req.timeout_ms)
+            except Exception as e:
+                await browser.close()
+                return {"error": f"{type(e).__name__}: {e}", "polluted": False}
+            try:
+                await page.wait_for_timeout(600)
+            except Exception:
+                pass
+            val = None
+            try:
+                val = await page.evaluate(
+                    "(k) => Object.prototype[k] === undefined ? null : String(Object.prototype[k])",
+                    req.probe)
+            except Exception:
+                val = None
+            await browser.close()
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}", "polluted": False}
+    return {"polluted": val == "owlPOLLUTED", "value": val}
+
+
 class WsProbeRequest(BaseModel):
     url: str
     messages: list[str] | None = None
