@@ -259,6 +259,9 @@ def run(
             from owlforge.engine.blindsqli import time_based_sqli_scan
             time_based_sqli_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                                  log=lambda m: emit("status", m))
+            from owlforge.engine.graphqlscan import graphql_scan
+            graphql_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                         log=lambda m: emit("status", m), target=target)
             from owlforge.engine.accesscontrol import access_control_scan
             access_control_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                                 identity_set, log=lambda m: emit("status", m))
