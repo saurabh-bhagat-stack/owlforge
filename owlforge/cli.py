@@ -87,6 +87,9 @@ def run(
     network_recon: bool = typer.Option(
         False, "--network-recon",
         help="Also run port/service discovery (nmap) — opt-in (broader authorization)."),
+    subdomains: bool = typer.Option(
+        False, "--subdomains",
+        help="Enumerate common subdomains of the target domain — opt-in (broader authorization)."),
 ) -> None:
     """Run a deep assessment against TARGET. Thorough by default — recon, interactive SPA
     mapping, pre-probe, specialists, validation, and reporting all run automatically."""
@@ -217,7 +220,8 @@ def run(
         surface_text, session_headers, auth_summary = run_recon(
             aid, target, sandbox_client, user_auth=user_auth, max_pages=recon_pages,
             network_recon_enabled=network_recon, browser_recon_enabled=True,
-            scope=scope, log=lambda m: console.print(rf"[dim]\[recon] {m}[/]"))
+            subdomains_enabled=subdomains, scope=scope,
+            log=lambda m: console.print(rf"[dim]\[recon] {m}[/]"))
         console.print(rf"[dim]\[auth] {auth_summary}[/]")
         try:
             nuclei_scan(aid, target, sandbox_client,
