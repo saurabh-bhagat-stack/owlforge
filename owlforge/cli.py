@@ -285,6 +285,9 @@ def run(
                          log=lambda m: emit("status", m))
             from owlforge.engine.sessionfix import session_fixation_scan
             session_fixation_scan(aid, sandbox_client, login_specs, log=lambda m: emit("status", m))
+            from owlforge.engine.pwreset import password_reset_scan
+            password_reset_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                                target=target, log=lambda m: emit("status", m))
             from owlforge.engine.protopoll import proto_pollution_scan
             proto_pollution_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                                  log=lambda m: emit("status", m))
