@@ -692,8 +692,10 @@ def oast_start(req: OastStartRequest) -> dict:
             args += ["-server", req.server]
         if req.token:
             args += ["-t", req.token]
+        log_file = os.path.join(ws, "oast_ish.log")
         try:
-            p = subprocess.Popen(args, stdout=_DEVNULL, stderr=_DEVNULL, stdin=_DEVNULL,
+            lf = open(log_file, "w")
+            p = subprocess.Popen(args, stdout=lf, stderr=lf, stdin=_DEVNULL,
                                  cwd=ws, start_new_session=True)
         except FileNotFoundError:
             return {"error": "interactsh-client not installed in the sandbox image"}
@@ -712,6 +714,39 @@ def oast_start(req: OastStartRequest) -> dict:
         if not domain:
             _oast_kill()
             return {"error": "interactsh did not register (server unreachable / blocked?)"}
+        # self-test: public interactsh servers often mismatch the client's crypto and fail to
+        # decrypt interactions ("Could not unmarshal interaction data"), which would silently
+        # look like "no vulns". Fire a self-callback and confirm it decodes; else report
+        # unhealthy so the caller falls through to the tunnel / a configured collaborator.
+        try:
+            subprocess.run(["bash", "-lc",
+                            f"curl -s -m 6 --noproxy '*' http://owlselftest.{domain}/ >/dev/null 2>&1; "
+                            f"nslookup owlselftest.{domain} >/dev/null 2>&1 || true"],
+                           timeout=12)
+        except Exception:
+            pass
+        # Trust interactsh ONLY if the self-interaction comes back DECODED. On the public
+        # servers decryption often fails (garbled -> "could not unmarshal"); absence of a
+        # decoded interaction (error, or nothing) means we cannot rely on it -> fall back.
+        decoded = False
+        for _ in range(16):
+            try:
+                if "owlselftest" in open(out_file).read():
+                    decoded = True
+                    break
+            except Exception:
+                pass
+            try:
+                low = open(log_file).read().lower()
+                if "could not unmarshal" in low or "unmarshal interaction" in low:
+                    break
+            except Exception:
+                pass
+            time.sleep(1)
+        if not decoded:
+            _oast_kill()
+            return {"error": "interactsh returned no decodable interaction "
+                             "(server/client mismatch or egress blocked) — falling back"}
         return {"mode": "interactsh", "domain": domain, "hits_file": out_file}
 
     if req.provider == "tunnel":
@@ -765,6 +800,7 @@ def oast_start(req: OastStartRequest) -> dict:
         if not domain:
             _oast_kill()
             return {"error": "tunnel did not come up (server unreachable / blocked?)"}
+        time.sleep(6)  # let the tunnel edge become routable before callbacks are injected
         return {"mode": "tunnel", "domain": domain, "hits_file": hits}
 
     return {"error": f"unknown provider {req.provider}"}
