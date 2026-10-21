@@ -523,51 +523,6 @@ def _apply_scope(inventory: list[dict], target: str, scope) -> list[dict]:
     return [it for it in inventory if scope.in_scope(it["url"])]
 
 
-_SUBDOMAIN_WORDS = (
-    "www", "api", "app", "admin", "dev", "staging", "stage", "test", "qa", "uat", "beta",
-    "portal", "dashboard", "auth", "login", "sso", "mail", "webmail", "vpn", "internal",
-    "intranet", "cdn", "static", "assets", "media", "files", "upload", "blog", "shop",
-    "store", "pay", "payment", "secure", "account", "my", "mobile", "m", "gateway", "proxy",
-    "gql", "graphql", "status", "jenkins", "git", "jira", "grafana", "kibana",
-)
-
-
-def _reg_domain(host: str) -> str:
-    parts = (host or "").split(".")
-    return ".".join(parts[-2:]) if len(parts) >= 2 else host
-
-
-def subdomain_enum(target, sandbox_client, scope=None, log=lambda m: None) -> list[str]:
-    """Resolve a bounded list of common subdomains of the target's registrable domain and
-    return http(s) seed URLs for the ones that resolve AND are in scope. Opt-in (broader
-    authorization). Discovery only — the scope resolver still gates every request."""
-    if sandbox_client is None:
-        return []
-    host = urlparse(target).netloc.split(":")[0]
-    dom = _reg_domain(host)
-    if not dom or "." not in dom:
-        return []
-    subs = " ".join(f"{w}.{dom}" for w in _SUBDOMAIN_WORDS)
-    cmd = f'for h in {subs}; do getent hosts "$h" >/dev/null 2>&1 && echo "$h"; done'
-    try:
-        r = sandbox_client.exec(cmd, timeout_ms=60_000)
-        resolved = [ln.strip() for ln in (getattr(r, "stdout", "") or "").splitlines() if ln.strip()]
-    except Exception as e:
-        log(f"subdomain enum error: {e}")
-        return []
-    seeds = []
-    for sub in dict.fromkeys(resolved):
-        if sub == host:
-            continue
-        url = f"https://{sub}/"
-        if scope is None or scope.in_scope(url):
-            seeds.append(url)
-    if seeds:
-        log(f"subdomain enum: {len(seeds)} resolvable in-scope subdomain(s): "
-            + ", ".join(s.split("//")[1].rstrip("/") for s in seeds[:10]))
-    return seeds
-
-
 def run_recon(
     assessment_id: str,
     target: str,
@@ -577,7 +532,6 @@ def run_recon(
     max_pages: int = 25,
     network_recon_enabled: bool = False,
     browser_recon_enabled: bool = False,
-    subdomains_enabled: bool = False,
     scope=None,
     log: Callable[[str], None] = lambda m: None,
 ) -> tuple[str, dict, str]:
@@ -618,13 +572,10 @@ def run_recon(
         log(f"WARNING: target may be UNREACHABLE — {_root.get('error') or 'no response'}. "
             "Findings will be empty because nothing could be fetched, NOT because the app is clean.")
 
-    # optional: subdomain/vhost enumeration -> extra crawl seeds (opt-in, scope-gated)
-    _sub_seeds = subdomain_enum(target, sandbox_client, scope, log=log) if subdomains_enabled else []
-
     # pass 1: unauthenticated (always)
     log("unauth recon")
     unauth_inv, header = _collect_surface(
-        assessment_id, target, {}, sandbox_client, extra_seeds=_sub_seeds or None,
+        assessment_id, target, {}, sandbox_client,
         max_pages=max_pages, browser_recon_enabled=browser_recon_enabled, log=log)
     unauth_inv = _apply_scope(unauth_inv, target, scope)
     unauth_keys = {(it["method"], it["url"], tuple(sorted(it["params"]))) for it in unauth_inv}
