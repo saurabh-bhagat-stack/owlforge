@@ -139,9 +139,14 @@ def probe(cls: str, target: dict, sandbox, session_headers: dict | None = None) 
         mark = f"http://owl-{_secrets.token_hex(3)}.probe/"
         r = _send(sandbox, method, url, p, mark, h)
         hdrs = {k.lower(): str(v) for k, v in (r.get("headers") or {}).items()}
-        if mark in hdrs.get("location", "") or mark in (r.get("body") or ""):
-            return (True, f"{p}: attacker URL reflected in redirect/body (SSRF/open-redirect)",
-                    _repro(mark, mark.split("//")[1].rstrip("/"), "SSRF / open redirect", "high"))
+        if mark in hdrs.get("location", ""):
+            # the server put our URL in a 3xx Location but did NOT fetch it -> this is an
+            # OPEN REDIRECT (CWE-601, medium), not SSRF. Label it correctly; conflating the
+            # two over-rated open redirects as high-severity SSRF.
+            return (True, f"{p}: attacker URL becomes the 3xx Location (open redirect, not SSRF)",
+                    _repro(mark, mark.split("//")[1].rstrip("/"), "Open redirect", "medium"))
+        # a URL merely echoed in the body is not proof of a server-side fetch; true SSRF is
+        # confirmed out-of-band by the OAST pass (a real callback), so do not claim it here.
         return False, "", None
 
     if cls == OPEN_REDIRECT:
