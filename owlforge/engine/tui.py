@@ -27,7 +27,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, Input, RichLog, Static
+from textual.widgets import DataTable, Input, RichLog, Static
 
 _SEV_STYLE = {"critical": "bold red", "high": "red", "medium": "yellow", "low": "cyan", "info": "dim"}
 _SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
@@ -237,13 +237,14 @@ class ScanApp(App):
     #filter { display: none; }
     #detail { padding: 1 2; }
     """
+    ENABLE_COMMAND_PALETTE = False
     BINDINGS = [
-        Binding("q,ctrl+c", "quit", "Quit"),
-        Binding("d", "open", "Details"),
-        Binding("s", "sort", "Sort"),
-        Binding("v", "sev", "Severity"),
-        Binding("slash", "filter", "Filter"),
-        Binding("l", "rawlog", "Raw log"),
+        Binding("ctrl+q,ctrl+c", "quit", "Quit", show=False),
+        Binding("d", "open", "Details", show=False),
+        Binding("s", "sort", "Sort", show=False),
+        Binding("v", "sev", "Severity", show=False),
+        Binding("slash", "filter", "Filter", show=False),
+        Binding("l", "rawlog", "Raw log", show=False),
     ]
 
     def __init__(self, assessment_id: str, target: str, model: str, scan_fn) -> None:
@@ -281,7 +282,6 @@ class ScanApp(App):
                 yield DataTable(id="surface", cursor_type="row")
         yield Input(placeholder="steer the scan — type a note, Enter to send", id="steer")
         yield Input(placeholder="filter findings — Enter to apply, empty to clear", id="filter")
-        yield Footer()
 
     def on_mount(self) -> None:
         ft = self.query_one("#findings", DataTable)

@@ -116,7 +116,7 @@ def test_quit_binding_exits(tmp_path, monkeypatch):
         app = ScanApp("a", "https://t", "m", scan_fn=lambda emit, steer=None: ("s", None))
         async with app.run_test() as pilot:
             await pilot.pause()
-            await pilot.press("q")
+            await pilot.press("ctrl+q")
             await pilot.pause()
     # returns (app exits) without hanging
     asyncio.run(_run())
