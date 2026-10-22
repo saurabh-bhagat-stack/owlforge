@@ -20,7 +20,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import DataTable, Footer, RichLog, Static
+from textual.widgets import DataTable, Footer, Input, RichLog, Static
 
 _SEV_STYLE = {"critical": "bold red", "high": "red", "medium": "yellow",
               "low": "cyan", "info": "dim"}
@@ -97,6 +97,9 @@ class ScanApp(App):
     BINDINGS = [
         Binding("q,ctrl+c", "quit", "Quit"),
         Binding("d", "open", "Details"),
+        Binding("s", "sort", "Sort"),
+        Binding("v", "sev", "Severity"),
+        Binding("slash", "filter", "Filter"),
     ]
 
     def __init__(self, assessment_id: str, target: str, model: str, scan_fn) -> None:
@@ -111,17 +114,23 @@ class ScanApp(App):
         self.result_status = "completed"
         self.result_summary = ""
         self.result_report = None
+        self._filter = ""
+        self._min_sev = -1       # -1 = all; else a _SEV_RANK floor
+        self._sort_key = "sev"   # sev | status | title
+        self._table_sig = None
 
     def compose(self) -> ComposeResult:
         yield Static(id="status")
         with Horizontal():
             yield DataTable(id="findings", zebra_stripes=True, cursor_type="row")
             yield RichLog(id="log", highlight=False, markup=False, wrap=False, max_lines=2000)
+        yield Input(placeholder="filter findings — Enter to apply, empty to clear", id="filter")
         yield Footer()
 
     def on_mount(self) -> None:
         dt = self.query_one("#findings", DataTable)
         dt.add_columns("SEV", "STATUS", "FINDING", "ENDPOINT")
+        self.query_one("#filter", Input).display = False
         dt.focus()
         self.set_interval(0.6, self._refresh)
         self._update_status()
@@ -181,18 +190,70 @@ class ScanApp(App):
         except Exception:
             return []
 
+    def _apply_view(self, rows: list[dict]) -> list[dict]:
+        """Filter + sort the findings for display per the current view state."""
+        if self._min_sev >= 0:
+            rows = [f for f in rows if _SEV_RANK.get(f["severity"].lower(), 0) >= self._min_sev]
+        if self._filter:
+            q = self._filter.lower()
+            rows = [f for f in rows if q in f["title"].lower() or q in f["endpoint"].lower()
+                    or q in f["severity"].lower() or q in f["status"].lower()]
+        if self._sort_key == "status":
+            rows.sort(key=lambda f: (f["status"] != "validated", -_SEV_RANK.get(f["severity"].lower(), 0)))
+        elif self._sort_key == "title":
+            rows.sort(key=lambda f: f["title"].lower())
+        else:
+            rows.sort(key=lambda f: (-_SEV_RANK.get(f["severity"].lower(), 0), f["status"] != "validated"))
+        return rows
+
     def _refresh(self) -> None:
-        dt = self.query_one("#findings", DataTable)
-        rows = self._findings()
+        rows = self._apply_view(self._findings())
         self._row_cache = {f["id"]: f for f in rows}
-        existing = set(dt.rows.keys())
+        sig = (self._filter, self._min_sev, self._sort_key,
+               tuple((f["id"], f["status"]) for f in rows))
+        if sig == self._table_sig:
+            self._update_status()
+            return
+        self._table_sig = sig
+        dt = self.query_one("#findings", DataTable)
+        cur = dt.cursor_row
+        dt.clear()
         for f in rows:
-            if f["id"] in existing:
-                continue
             sev = Text(f["severity"].upper()[:8], style=_SEV_STYLE.get(f["severity"].lower(), "white"))
             st = Text(f["status"][:9], style=_STATUS_STYLE.get(f["status"], "white"))
             dt.add_row(sev, st, (f["title"] or "")[:60], (f["endpoint"] or "")[:60], key=f["id"])
+        try:
+            if dt.row_count:
+                dt.move_cursor(row=min(max(cur, 0), dt.row_count - 1))
+        except Exception:
+            pass
         self._update_status()
+
+    def action_sort(self) -> None:
+        order = ["sev", "status", "title"]
+        self._sort_key = order[(order.index(self._sort_key) + 1) % len(order)]
+        self._table_sig = None
+        self._refresh()
+
+    def action_sev(self) -> None:
+        steps = [-1, 1, 2, 3, 4]       # all, low+, medium+, high+, critical
+        self._min_sev = steps[(steps.index(self._min_sev) + 1) % len(steps)]
+        self._table_sig = None
+        self._refresh()
+
+    def action_filter(self) -> None:
+        inp = self.query_one("#filter", Input)
+        inp.value = self._filter
+        inp.display = True
+        inp.focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._filter = (event.value or "").strip()
+        inp = self.query_one("#filter", Input)
+        inp.display = False
+        self.query_one("#findings", DataTable).focus()
+        self._table_sig = None
+        self._refresh()
 
     def _update_status(self) -> None:
         el = int(time.time() - self._started)
@@ -206,6 +267,11 @@ class ScanApp(App):
         t.append(f"   {el // 60:02d}:{el % 60:02d}", style="dim")
         t.append(f"   {v} validated", style="bold green")
         t.append(f" / {c} candidate", style="yellow")
+        t.append(f"   sort:{self._sort_key}", style="dim")
+        if self._min_sev >= 0:
+            t.append(" sev>=" + ["", "low", "medium", "high", "critical"][self._min_sev], style="dim")
+        if self._filter:
+            t.append(f" /{self._filter}", style="dim")
         if self._done:
             t.append(f"   [{self.result_status.upper()} — q to quit]", style="bold")
         try:
