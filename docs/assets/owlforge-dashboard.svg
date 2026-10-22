@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 520" width="920" height="520" font-family="'SFMono-Regular',Consolas,'Liberation Mono',monospace" role="img" aria-label="owlforge interactive dashboard">
   <style>
-    .t{font-size:13px} .dim{fill:#5b7891} .cy{fill:#22d3ee} .gn{fill:#34d399} .yl{fill:#fbbf24}
+    .t{font-size:13px} .dim{fill:#5b7891} .cy{fill:#fbbf24} .gn{fill:#34d399} .yl{fill:#fbbf24}
     .rd{fill:#f87171} .wh{fill:#cbd5e1} .b{font-weight:700}
   </style>
   <rect width="920" height="520" rx="12" fill="#0b1220"/>
@@ -15,7 +15,7 @@
   <text x="26" y="78" class="t"><tspan class="yl b">phase hunt</tspan><tspan class="dim">   02:14   </tspan><tspan class="gn b">41 validated</tspan><tspan class="dim"> / </tspan><tspan class="yl">7 candidate</tspan></text>
 
   <!-- findings panel -->
-  <rect x="12" y="96" width="560" height="384" rx="8" fill="none" stroke="#2dd4bf" stroke-opacity="0.5"/>
+  <rect x="12" y="96" width="560" height="384" rx="8" fill="none" stroke="#f59e0b" stroke-opacity="0.5"/>
   <text x="26" y="114" class="t dim">findings (48)</text>
   <text x="26" y="138" class="t dim">SEV       STATUS     FINDING</text>
   <g class="t">
@@ -31,7 +31,7 @@
     <text x="26" y="340"><tspan class="yl">MEDIUM  </tspan><tspan class="yl">  candidate </tspan><tspan class="wh"> CSRF: anti-CSRF not enforced</tspan></text>
     <text x="26" y="360"><tspan class="cy">LOW     </tspan><tspan class="yl">  candidate </tspan><tspan class="wh"> Missing Content-Security-Policy</tspan></text>
   </g>
-  <rect x="556" y="150" width="4" height="60" rx="2" fill="#2dd4bf" fill-opacity="0.6"/>
+  <rect x="556" y="150" width="4" height="60" rx="2" fill="#f59e0b" fill-opacity="0.6"/>
   <text x="26" y="462" class="t dim">↑/↓ scroll · enter/click = details · q quit</text>
 
   <!-- event log panel -->
@@ -51,5 +51,5 @@
     <text x="592" y="318"><tspan class="dim">[status] validation — 41 ok</tspan></text>
     <text x="592" y="336"><tspan class="dim">[status] collapse — merged 15</tspan></text>
   </g>
-  <text x="26" y="504" class="t dim"> q Quit   d Details                                          owlforge v0.1.0</text>
+  <text x="26" y="504" class="t dim"> q Quit   d Details                                          owlforge v0.1.0b1</text>
 </svg>
