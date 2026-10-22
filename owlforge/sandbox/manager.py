@@ -40,12 +40,49 @@ class SandboxSession:
         return f"http://127.0.0.1:{self.novnc_host_port}/vnc.html?autoconnect=1&resize=scale"
 
 
+_ENGINE_CACHE: str | None = None
+_ENGINES = ("docker", "podman", "nerdctl")
+
+
 def container_engine() -> str:
-    """The container CLI owlforge shells out to. Defaults to docker; set
-    OWLFORGE_CONTAINER_ENGINE=podman (or nerdctl) to use another Docker-compatible CLI
-    directly, with no shim/alias needed."""
+    """The container CLI owlforge shells out to.
+
+    Order: OWLFORGE_CONTAINER_ENGINE if set; else auto-detect a RUNNING engine
+    (docker, then podman, then nerdctl); else the first one that is at least installed
+    (so the error message is accurate); else 'docker'. Result is cached."""
+    global _ENGINE_CACHE
     import os
-    return os.environ.get("OWLFORGE_CONTAINER_ENGINE", "docker").strip() or "docker"
+    import shutil
+    env = os.environ.get("OWLFORGE_CONTAINER_ENGINE", "").strip()
+    if env:
+        return env
+    if _ENGINE_CACHE:
+        return _ENGINE_CACHE
+    for cand in _ENGINES:                     # prefer one that is actually running
+        if shutil.which(cand):
+            try:
+                if subprocess.run([cand, "info"], capture_output=True,
+                                  timeout=12).returncode == 0:
+                    _ENGINE_CACHE = cand
+                    return cand
+            except Exception:
+                pass
+    for cand in _ENGINES:                     # else: installed-but-not-running (clear error)
+        if shutil.which(cand):
+            _ENGINE_CACHE = cand
+            return cand
+    _ENGINE_CACHE = "docker"
+    return "docker"
+
+
+def engine_start_hint(engine: str | None = None) -> str:
+    """A human hint for starting the detected engine."""
+    eng = engine or container_engine()
+    if eng == "podman":
+        return "start Podman (e.g. `podman machine start`)"
+    if eng == "nerdctl":
+        return "start your containerd/nerdctl backend"
+    return "start Docker (Docker Desktop, colima, or Rancher Desktop)"
 
 
 def _run(args: list[str], timeout: float = 60.0) -> subprocess.CompletedProcess:

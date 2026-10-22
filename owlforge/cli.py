@@ -386,9 +386,12 @@ def run(
                       "owlforge needs it for real testing — enable it and re-run.[/]")
         raise typer.Exit(1)
     if not manager.docker_available():
-        console.print("[red]No running container engine. Start one (Docker Desktop, colima, "
-                      "Rancher Desktop, or Podman in Docker-compatible mode) and re-run — "
-                      "owlforge runs its tools in a sandbox container.[/]")
+        _eng = manager.container_engine()
+        console.print(f"[red]No running container engine — owlforge tried `{_eng}`. "
+                      f"{manager.engine_start_hint(_eng)}, then re-run.[/]")
+        console.print("[dim]Using Podman? set OWLFORGE_CONTAINER_ENGINE=podman "
+                      "(PowerShell: $env:OWLFORGE_CONTAINER_ENGINE=\"podman\") and start "
+                      "`podman machine`. See the README \"Using Podman\" section.[/]")
         raise typer.Exit(1)
     if not manager.image_exists(cfg.sandbox.image):
         console.print(rf"[yellow]\[sandbox] image not present locally "
