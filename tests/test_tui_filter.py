@@ -81,3 +81,25 @@ def test_filter_sort_keys_drive_the_table(tmp_path, monkeypatch):
             assert dt.row_count == 1
 
     asyncio.run(_run())
+
+
+def test_steer_queues_notes_for_the_orchestrator(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    import asyncio
+
+    from textual.widgets import Input
+
+    from owlforge.engine.tui import ScanApp
+
+    async def _run():
+        app = ScanApp("a", "t", "m", scan_fn=lambda e, s: (None, None))
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            # submit a steer note the way the Input would
+            app.on_input_submitted(Input.Submitted(app.query_one("#steer"), "focus on /api/admin"))
+            await pilot.pause()
+            drained = app.drain_steer()
+            assert drained == ["focus on /api/admin"]
+            assert app.drain_steer() == []          # cleared after draining
+
+    asyncio.run(_run())

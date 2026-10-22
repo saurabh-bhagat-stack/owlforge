@@ -142,7 +142,7 @@ def init() -> None:
 
 def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_headers,
               identity_set, login_specs, auth_summary, max_turns, scope, emit,
-              done_seed=None, checkpoint=None, detected_tech=None):
+              done_seed=None, checkpoint=None, detected_tech=None, steer_fn=None):
     import asyncio
     summary = ""
     report_path = None
@@ -160,7 +160,7 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
         session_headers=session_headers, scan_mode="deep", target=target,
         max_turns=max(6, max_turns // 2), scope=scope, operator_message=message,
         done_seed=done_seed, checkpoint=checkpoint, validate_cb=_validate_cb,
-        detected_tech=detected_tech,
+        detected_tech=detected_tech, steer_fn=steer_fn,
     ))
     try:
         from owlforge.engine.orchestrator import read_blackboard
@@ -482,13 +482,14 @@ def run(
     report_path = None
     summary = ""
 
-    def _hunt(_emit):
+    def _hunt(_emit, _steer=None):
         return _run_hunt(
             aid, target=target, message=message, cfg=cfg, client=client,
             sandbox_client=sandbox_client, session_headers=session_headers,
             identity_set=identity_set, login_specs=login_specs,
             auth_summary=auth_summary, max_turns=max_turns, scope=scope, emit=_emit,
-            done_seed=_done_seed, checkpoint=_checkpoint, detected_tech=detected_tech)
+            done_seed=_done_seed, checkpoint=_checkpoint, detected_tech=detected_tech,
+            steer_fn=_steer)
 
     try:
         if _use_tui:

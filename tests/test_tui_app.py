@@ -29,7 +29,7 @@ def test_tui_populates_tracks_phase_and_opens_detail(tmp_path, monkeypatch):
     from owlforge.engine.tui import FindingDetail, ScanApp
 
     async def _run():
-        app = ScanApp("a", "https://t", "modelX", scan_fn=lambda emit: ("summary", None))
+        app = ScanApp("a", "https://t", "modelX", scan_fn=lambda emit, steer=None: ("summary", None))
         async with app.run_test() as pilot:
             app.on_scan_event("status", "orchestrator: 10 items -> 20 tasks")
             app._refresh()

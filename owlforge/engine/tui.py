@@ -13,6 +13,7 @@ stays open when the scan finishes so findings can be browsed; press q to quit.
 
 from __future__ import annotations
 
+import threading
 import time
 
 from rich.text import Text
@@ -100,6 +101,7 @@ class ScanApp(App):
         Binding("s", "sort", "Sort"),
         Binding("v", "sev", "Severity"),
         Binding("slash", "filter", "Filter"),
+        Binding("m", "steer", "Steer"),
     ]
 
     def __init__(self, assessment_id: str, target: str, model: str, scan_fn) -> None:
@@ -118,6 +120,8 @@ class ScanApp(App):
         self._min_sev = -1       # -1 = all; else a _SEV_RANK floor
         self._sort_key = "sev"   # sev | status | title
         self._table_sig = None
+        self._steer: list[str] = []
+        self._steer_lock = threading.Lock()
 
     def compose(self) -> ComposeResult:
         yield Static(id="status")
@@ -125,12 +129,14 @@ class ScanApp(App):
             yield DataTable(id="findings", zebra_stripes=True, cursor_type="row")
             yield RichLog(id="log", highlight=False, markup=False, wrap=False, max_lines=2000)
         yield Input(placeholder="filter findings — Enter to apply, empty to clear", id="filter")
+        yield Input(placeholder="steer the scan — a note the next specialists will see", id="steer")
         yield Footer()
 
     def on_mount(self) -> None:
         dt = self.query_one("#findings", DataTable)
         dt.add_columns("SEV", "STATUS", "FINDING", "ENDPOINT")
         self.query_one("#filter", Input).display = False
+        self.query_one("#steer", Input).display = False
         dt.focus()
         self.set_interval(0.6, self._refresh)
         self._update_status()
@@ -141,7 +147,7 @@ class ScanApp(App):
         from owlforge.engine.events import Emitter
         emit = Emitter(self.aid, dashboard=_TuiSink(self), persist=True)
         try:
-            summary, report = self.scan_fn(emit)
+            summary, report = self.scan_fn(emit, self.drain_steer)
             self.result_summary, self.result_report = summary, report
         except KeyboardInterrupt:
             self.result_status = "stopped"
@@ -241,6 +247,19 @@ class ScanApp(App):
         self._table_sig = None
         self._refresh()
 
+    def drain_steer(self) -> list[str]:
+        """Thread-safe: return and clear queued operator notes (read by the orchestrator)."""
+        with self._steer_lock:
+            out = self._steer[:]
+            self._steer.clear()
+            return out
+
+    def action_steer(self) -> None:
+        inp = self.query_one("#steer", Input)
+        inp.value = ""
+        inp.display = True
+        inp.focus()
+
     def action_filter(self) -> None:
         inp = self.query_one("#filter", Input)
         inp.value = self._filter
@@ -248,6 +267,16 @@ class ScanApp(App):
         inp.focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "steer":
+            txt = (event.value or "").strip()
+            if txt:
+                with self._steer_lock:
+                    self._steer.append(txt)
+                self._write_log("note", f"steer queued: {txt[:80]}")
+            event.input.value = ""
+            event.input.display = False
+            self.query_one("#findings", DataTable).focus()
+            return
         self._filter = (event.value or "").strip()
         inp = self.query_one("#filter", Input)
         inp.display = False
@@ -304,7 +333,8 @@ class ScanApp(App):
 
 
 def run_scan_tui(assessment_id: str, target: str, model: str, scan_fn):
-    """Run the scan inside the interactive dashboard. scan_fn(emit) -> (summary, report).
+    """Run the scan inside the interactive dashboard. scan_fn(emit, steer_fn) ->
+    (summary, report).
     Returns (status, summary, report_path) after the user quits."""
     app = ScanApp(assessment_id, target, model, scan_fn)
     app.run()

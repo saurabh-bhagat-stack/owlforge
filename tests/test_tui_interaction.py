@@ -39,7 +39,7 @@ def test_full_interaction_cycle(tmp_path, monkeypatch):
     from owlforge.engine.tui import FindingDetail, ScanApp
 
     async def _run():
-        app = ScanApp("a", "https://t", "modelX", scan_fn=lambda emit: ("summary", "/r.md"))
+        app = ScanApp("a", "https://t", "modelX", scan_fn=lambda emit, steer=None: ("summary", "/r.md"))
         async with app.run_test(size=(100, 24)) as pilot:
             # feed a stream of log events -> the event pane fills and is scrollable
             for i in range(60):
@@ -111,7 +111,7 @@ def test_quit_binding_exits(tmp_path, monkeypatch):
     from owlforge.engine.tui import ScanApp
 
     async def _run():
-        app = ScanApp("a", "https://t", "m", scan_fn=lambda emit: ("s", None))
+        app = ScanApp("a", "https://t", "m", scan_fn=lambda emit, steer=None: ("s", None))
         async with app.run_test() as pilot:
             await pilot.pause()
             await pilot.press("q")

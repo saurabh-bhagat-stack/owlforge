@@ -238,6 +238,7 @@ async def run_orchestrated(
     checkpoint=None,
     validate_cb=None,
     detected_tech=None,
+    steer_fn=None,
 ) -> str:
     registry = build_registry(with_sandbox=sandbox is not None)
     done_keys: set = {tuple(k) for k in (done_seed or [])}
@@ -255,6 +256,14 @@ async def run_orchestrated(
                            "(re-planning on newly-discovered surface)")
         ran_this_round = 0
         for cls in _ORDER:
+            if steer_fn is not None:
+                try:
+                    pending = steer_fn() or []
+                except Exception:
+                    pending = []
+                if pending:
+                    operator_message = "\n".join([operator_message, *pending]).strip()
+                    emit("status", f"[steer] added {len(pending)} operator note(s) to the hunt")
             targets = tasks.get(cls)
             if not targets:
                 continue
