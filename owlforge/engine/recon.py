@@ -677,7 +677,7 @@ def _arjun_params(data) -> list[str]:
 
 
 def arjun_param_discovery(target, inventory, sandbox_client, session_headers=None,
-                          log: Callable[[str], None] = lambda m: None, cap: int = 3) -> list[dict]:
+                          log: Callable[[str], None] = lambda m: None, cap: int = 6) -> list[dict]:
     """Brute-force HIDDEN parameters on a few GET endpoints with arjun (in-sandbox).
     Reveals params that feed injection/IDOR but never appear in links or forms. Bounded;
     degrades silently if arjun is not in the image."""

