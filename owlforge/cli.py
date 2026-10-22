@@ -391,7 +391,7 @@ def run(
                                     log=lambda m: console.print(rf"[dim]\[identities] {m}[/]"))
             _sso_idents = [i for i in _idents if i.needs_sso]
             if _sso_idents and sandbox_session is not None:
-                from owlforge.engine.authbroker import capture_sso_session, storage_state_to_cookie
+                from owlforge.engine.authbroker import capture_sso_session, storage_state_to_headers
                 for ident in _sso_idents:
                     _login_url = ident.auth.get("url") or target
                     ppath = str(assessments_dir() / aid / f"sso_{ident.label}.json")
@@ -399,7 +399,7 @@ def run(
                         sandbox_client, sandbox_session.novnc_url, _login_url,
                         persist_path=ppath, prompt_fn=console.input,
                         log=lambda m: console.print(m))
-                    ident.session_headers = storage_state_to_cookie(state, target)
+                    ident.session_headers = storage_state_to_headers(state, target)
                     ident.established = bool(ident.session_headers)
             _prim = primary_identity(_idents)
             _ok = sum(1 for i in _idents if i.session_headers)

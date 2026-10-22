@@ -9,6 +9,7 @@ a project file for reuse, and converts its cookies to a session header for the h
 from __future__ import annotations
 
 import json
+import re
 import sys
 from collections.abc import Callable
 from urllib.parse import urlparse
@@ -24,6 +25,43 @@ def storage_state_to_cookie(state: dict, target: str) -> dict:
         if not dom or dom == host or host.endswith("." + dom) or dom.endswith("." + host):
             pairs.append(f"{c['name']}={c['value']}")
     return {"Cookie": "; ".join(pairs)} if pairs else {}
+
+
+_JWT = re.compile(r"[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{8,}")
+_TOKEN_KEYS = ("access_token", "id_token", "auth_token", "accesstoken", "authorization",
+               "bearer", "jwt", "token", "auth", "session")
+
+
+def _bearer_from_localstorage(state: dict) -> str | None:
+    """Best-effort bearer token from a storage_state's localStorage: a JWT-shaped value,
+    or a token-named key (whose value may be a raw token or JSON wrapping one)."""
+    fallback = None
+    for origin in (state or {}).get("origins", []) or []:
+        for item in origin.get("localStorage", []) or []:
+            name = str(item.get("name", "")).lower()
+            raw = str(item.get("value", "")).strip()
+            if not raw:
+                continue
+            val = raw.strip().strip('"')
+            if _JWT.fullmatch(val):
+                return val
+            if any(k in name for k in _TOKEN_KEYS):
+                m = _JWT.search(raw)       # value may be JSON like {"access_token":"x.y.z"}
+                if m:
+                    return m.group(0)
+                if val and " " not in val and len(val) >= 16:
+                    fallback = fallback or val
+    return fallback
+
+
+def storage_state_to_headers(state: dict, target: str) -> dict:
+    """Cookie header PLUS an Authorization: Bearer header when the SPA keeps its session
+    as a token in localStorage (modern JWT SPAs), so the hunt carries the real session."""
+    headers = dict(storage_state_to_cookie(state, target))
+    tok = _bearer_from_localstorage(state)
+    if tok:
+        headers["Authorization"] = f"Bearer {tok}"
+    return headers
 
 
 def capture_sso_session(
