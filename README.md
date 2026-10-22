@@ -27,13 +27,19 @@ Original work — its own architecture and engine, built from the ground up.
 
 ## Demo
 
-A live run in the interactive dashboard (`-D`) — scrollable findings table, click a row for the full finding, live event log:
+A live run in the interactive dashboard (`-D`). A **narrative activity feed** tells the
+story of the scan (what it's testing and why, the decisive probes, every confirmed
+finding — the agent's own reasoning shown dim and tagged `thinking`, never as fact), with
+live findings, a **current-target** card, the **discovered surface**, and a **steer** box
+to nudge the running scan:
 
 <p align="center">
   <img src="docs/assets/owlforge-dashboard.svg" alt="owlforge dashboard" width="820">
 </p>
 
-> _Illustrative layout; findings shown are representative of a run against a deliberately-vulnerable test app._
+> _Illustrative; findings are representative of a run against a deliberately-vulnerable
+> test app. Keys: ↑↓ navigate · enter/click details · `/` filter · `s` sort · `v` severity ·
+> `m`-less steer box at the bottom · `L` raw log · `Ctrl+Q` quit._
 
 Prefer plain output? Omit `-D` for a scrollable streaming log (and `-n` for headless CI).
 
@@ -161,8 +167,9 @@ owlforge run ./openapi.yaml            # or an OpenAPI/Swagger spec (json/yaml)
 owlforge run ./postman_collection.json # or a Postman v2.x collection
 ```
 
-Watch it live in an **interactive dashboard** (scrollable findings table, click a row
-for the full finding, scrollable event log):
+Watch it live in an **interactive dashboard** — a narrative activity feed, live findings
+(filter/sort/drill-in), the current target, the discovered surface, and a steer box to
+guide the scan as it runs:
 ```bash
 owlforge run app.example -D
 ```

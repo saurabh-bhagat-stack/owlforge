@@ -14,8 +14,10 @@ false-positive-averse validation.
   understand → auth auto-escalation (incl. login-page credential harvest, SSO/MFA via
   noVNC, RFC-6238 TOTP) → orchestrator + deterministic pre-probe → per-class specialists
   with a bypass loop → evidence-gated validation → exploit chaining → report.
-- **Interactive dashboard** (`-D`): scrollable findings table, click-through detail,
-  live event log; default is a scrollable streaming log (`-n` for headless CI).
+- **Interactive dashboard** (`-D`): a narrative activity feed (what it's testing and why,
+  tagged `thinking`), live findings (filter/sort/drill-in), a current-target card, the
+  discovered surface, and a steer box to guide the running scan; default is a scrollable
+  streaming log (`-n` for headless CI).
 - **Eager validation:** findings are confirmed per phase and surface mid-scan.
 - **Knowledge packs** (`owlforge/knowledge/`): per-class / per-framework methodology
   injected into specialists, matched to recon fingerprint.
