@@ -348,8 +348,9 @@ def run(
                       "owlforge needs it for real testing — enable it and re-run.[/]")
         raise typer.Exit(1)
     if not manager.docker_available():
-        console.print("[red]Docker isn't running. Start it (e.g. `colima start` or Docker "
-                      "Desktop) and re-run — owlforge runs its tools in a sandbox container.[/]")
+        console.print("[red]No running container engine. Start one (Docker Desktop, colima, "
+                      "Rancher Desktop, or Podman in Docker-compatible mode) and re-run — "
+                      "owlforge runs its tools in a sandbox container.[/]")
         raise typer.Exit(1)
     if not manager.image_exists(cfg.sandbox.image):
         console.print(rf"[yellow]\[sandbox] image not present locally "

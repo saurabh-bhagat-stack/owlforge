@@ -93,7 +93,7 @@ and [`docs/recon-spec.md`](docs/recon-spec.md).
 
 ## Requirements
 - **Python 3.11+**
-- **Docker** — for the sandbox (real tool execution). On macOS, [colima](https://github.com/abiosoft/colima) works well.
+- **A container engine** — for the sandbox (real tool execution). Anything that provides the `docker` CLI works: Docker Desktop, [colima](https://github.com/abiosoft/colima), Rancher Desktop, or Podman in its Docker-compatible mode.
 - **An OpenAI-compatible LLM endpoint** — local (Ollama / Jan / LM Studio / llama.cpp) or hosted.
 
 ## Full setup (from scratch)
@@ -110,8 +110,8 @@ pip install -e .                 # add ".[dev]" for tests/lint
 # 3. initialize config + local DB  (writes ~/.owlforge/config.toml)
 owlforge init
 
-# 4. start Docker — the sandbox image is pulled automatically on first run
-colima start                     # macOS; or ensure Docker Desktop/daemon is running
+# 4. start your container engine (Docker Desktop / colima / Rancher Desktop / Podman)
+#    the sandbox image is then pulled automatically on first run
 owlforge sandbox pull            # optional: pre-fetch the published image now
 #                                  (or build from source instead: owlforge sandbox build)
 owlforge sandbox status          # confirm: docker available + image present
