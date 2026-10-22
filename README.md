@@ -6,7 +6,7 @@
   <img alt="tests" src="https://img.shields.io/badge/tests-229%20passing-2dd4bf">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-22d3ee">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-5b7891">
-  <img alt="status" src="https://img.shields.io/badge/status-active%20development-f59e0b">
+  <img alt="status" src="https://img.shields.io/badge/status-beta-f59e0b">
 </p>
 
 A **local-first, model-agnostic, autonomous web-application penetration-testing
@@ -17,8 +17,9 @@ container you build yourself.
 
 Original work — its own architecture and engine, built from the ground up.
 
-> ⚠️ **Status: active development.** The engine works end to end on real targets;
-> interfaces and schema still change. **Only test systems you are authorized to assess.**
+> ⚠️ **Status: beta.** The engine works end to end on real targets, but some areas are
+> still in progress (see [Roadmap](#roadmap)) and interfaces/schema may change. **Only
+> test systems you are authorized to assess.**
 
 > **Usage guide:** worked examples (authenticated IDOR, OAST config, reading results) are in [docs/USAGE.md](docs/USAGE.md).
 
@@ -187,6 +188,20 @@ owlforge tells you to start it rather than silently running a weaker host-only s
 - Reports export to **Markdown, HTML, and SARIF 2.1.0** (CWE/OWASP-tagged for CI).
 - Out of scope by design: non-web surfaces (thick-client/mobile/gRPC/SOAP), and any
   destructive action — proof is always read-only (e.g. RCE proven with `id`/`hostname`).
+
+## Roadmap
+
+Beta — these are known gaps being worked on:
+
+- **User roles & richer multi-identity** — deeper role modelling beyond the current
+  owner/other/anon differential.
+- **SSO / IdP flows** — hardening automated sign-in across more providers (today:
+  form login, login-page harvest, headed noVNC for SSO/MFA, RFC-6238 TOTP).
+- **Deeper API scanning** — beyond OpenAPI/Postman ingestion: schema-aware auth,
+  body/variable fuzzing, and API-specific abuse cases.
+- **White-box mode** — optional source-aware pass (secret scan + SAST) to prioritise
+  dynamic testing; also unlocks PR diff-scope.
+- Logout/session-invalidation confirmation; race conditions; broader CORS checks.
 
 ## Development
 ```bash
