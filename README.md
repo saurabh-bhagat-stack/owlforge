@@ -17,9 +17,11 @@ container you build yourself.
 
 Original work — its own architecture and engine, built from the ground up.
 
-> ⚠️ **Status: beta.** The engine works end to end on real targets, but some areas are
-> still in progress (see [Roadmap](#roadmap)) and interfaces/schema may change. **Only
-> test systems you are authorized to assess.**
+> ⚠️ **Status: beta (public testing phase).** The engine works end to end on real targets
+> and is being validated across different kinds of applications; some areas are still in
+> progress (see [Roadmap](#roadmap)) and interfaces/schema may change. Findings and
+> recall will keep improving as testing broadens. **Only test systems you are authorized
+> to assess.** Feedback and target reports are welcome via Issues.
 
 > **Usage guide:** worked examples (authenticated IDOR, OAST config, reading results) are in [docs/USAGE.md](docs/USAGE.md).
 
@@ -87,6 +89,12 @@ SETUP → RECON → UNDERSTAND → AUTH → PLAN → HUNT → VALIDATE → DEEPE
 Vuln classes: SQLi · reflected/DOM/stored XSS · access-control (IDOR + horizontal/vertical
 privesc) · path-traversal · SSRF · open-redirect · CRLF · CSRF · SSTI · RCE · NoSQL · XXE ·
 deserialization · file-upload · GraphQL · info-disclosure · WebSocket · request-smuggling.
+
+**Known-CVE coverage.** Recon runs **nuclei** with its full baked template set, so known
+CVEs and misconfigurations are flagged out of the box (e.g. Log4Shell, Spring4Shell,
+Text4Shell, and templates for Confluence, Jira, Grafana, GitLab, WordPress, and many
+more). owlforge also has a **native out-of-band Log4Shell/JNDI** check (header- and
+param-based, confirmed by a DNS/LDAP callback).
 
 See [`docs/WORKFLOW.md`](docs/WORKFLOW.md) (plan of record), [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md),
 and [`docs/recon-spec.md`](docs/recon-spec.md).
