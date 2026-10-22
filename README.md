@@ -1,4 +1,13 @@
-# owlforge
+<p align="center">
+  <img src="docs/assets/owlforge-banner.svg" alt="owlforge" width="760">
+</p>
+
+<p align="center">
+  <img alt="tests" src="https://img.shields.io/badge/tests-229%20passing-2dd4bf">
+  <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-22d3ee">
+  <img alt="license" src="https://img.shields.io/badge/license-MIT-5b7891">
+  <img alt="status" src="https://img.shields.io/badge/status-active%20development-f59e0b">
+</p>
 
 A **local-first, model-agnostic, autonomous web-application penetration-testing
 platform**. Point it at an authorized target and a model you choose drives the whole
@@ -53,6 +62,14 @@ SETUP → RECON → UNDERSTAND → AUTH → PLAN → HUNT → VALIDATE → DEEPE
 - **Exploit chaining.** After validation, owlforge correlates already-validated findings
   into higher-impact attack paths (credentialed access → IDOR/privilege escalation;
   SSRF → cloud instance metadata) — described, never further exploited.
+- **Findings confirm live.** Validation runs incrementally — each specialist's findings
+  are evidence-checked the moment it finishes, so confirmed issues surface mid-scan
+  instead of only at the end.
+- **Methodology knowledge packs.** Per-class / per-framework markdown packs
+  (`owlforge/knowledge/`) are injected into the relevant specialist's prompt, matched
+  to what recon fingerprinted — deepen coverage by adding a file, not code.
+- **Targets include API descriptions.** Point it at an OpenAPI/Swagger (JSON/YAML) or
+  Postman collection and every operation is tested without crawling.
 
 Vuln classes: SQLi · reflected/DOM/stored XSS · access-control (IDOR + horizontal/vertical
 privesc) · path-traversal · SSRF · open-redirect · CRLF · CSRF · SSTI · RCE · NoSQL · XXE ·
@@ -107,6 +124,14 @@ The command is one argument. It runs **deep by default** — recon, interactive 
 mapping, pre-probe, specialists, validation, and reporting, all automatic.
 ```bash
 owlforge run ginandjuice.shop          # bare host is fine; https is assumed
+owlforge run ./openapi.yaml            # or an OpenAPI/Swagger spec (json/yaml)
+owlforge run ./postman_collection.json # or a Postman v2.x collection
+```
+
+Watch it live in an **interactive dashboard** (scrollable findings table, click a row
+for the full finding, scrollable event log):
+```bash
+owlforge run app.example -D
 ```
 Add `-m` only to steer it — scope, credentials, focus areas, constraints. This is the
 operator's highest-priority guidance and it reaches the specialists:
@@ -121,6 +146,7 @@ owlforge run app.example --identities roles.yaml   # structured multi-role creds
 owlforge run app.example --scope api.example --out-of-scope "*/logout*"   # enforced scope boundary
 owlforge run app.example --model saluki-27b:latest # override the configured model for this run
 owlforge run app.example --network-recon           # also nmap (opt-in: broader authorization)
+owlforge run app.example -n --fail-on high         # headless CI gate: exit 2 on >= high
 ```
 Each run gets an auto project name `<host>-<hash>`, so repeat scans of the same domain
 stay separate. A project name derives automatically — there's no `--project` to set, and

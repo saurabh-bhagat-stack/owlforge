@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 260" width="960" height="260" font-family="'Segoe UI',Helvetica,Arial,sans-serif" role="img" aria-label="owlforge — autonomous web-app penetration testing">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#0e1a2b"/>
+    </linearGradient>
+    <linearGradient id="cyan" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="1" stop-color="#2dd4bf"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="960" height="260" rx="22" fill="url(#bg)"/>
+  <rect x="1.5" y="1.5" width="957" height="257" rx="21" fill="none" stroke="#1e3a5f" stroke-width="1.5"/>
+
+  <!-- owl mark -->
+  <g transform="translate(78,130)">
+    <circle r="66" fill="none" stroke="#163049" stroke-width="2"/>
+    <!-- ear tufts -->
+    <path d="M-34,-44 L-20,-18 L-48,-24 Z" fill="url(#cyan)"/>
+    <path d="M34,-44 L20,-18 L48,-24 Z" fill="url(#cyan)"/>
+    <!-- head/body -->
+    <path d="M0,-48 C34,-48 50,-22 50,6 C50,40 28,58 0,58 C-28,58 -50,40 -50,6 C-50,-22 -34,-48 0,-48 Z"
+          fill="#0f2235" stroke="url(#cyan)" stroke-width="3"/>
+    <!-- eyes -->
+    <circle cx="-20" cy="-6" r="19" fill="#06111d" stroke="url(#cyan)" stroke-width="3"/>
+    <circle cx="20" cy="-6" r="19" fill="#06111d" stroke="url(#cyan)" stroke-width="3"/>
+    <circle cx="-20" cy="-6" r="7" fill="#22d3ee"/>
+    <circle cx="20" cy="-6" r="7" fill="#22d3ee"/>
+    <!-- beak -->
+    <path d="M0,4 L-7,16 L7,16 Z" fill="#2dd4bf"/>
+  </g>
+
+  <!-- wordmark -->
+  <text x="180" y="128" font-size="74" font-weight="700" letter-spacing="-1" fill="#e6f6ff">owlforge</text>
+  <text x="182" y="168" font-size="22" font-weight="500" letter-spacing="3" fill="#7fd9e8">AUTONOMOUS WEB-APP PENETRATION TESTING</text>
+  <rect x="184" y="186" width="470" height="3" rx="1.5" fill="url(#cyan)"/>
+  <text x="184" y="214" font-size="17" font-weight="500" letter-spacing="0.5" fill="#5b7891">local-first &#183; model-agnostic &#183; evidence-gated</text>
+</svg>
