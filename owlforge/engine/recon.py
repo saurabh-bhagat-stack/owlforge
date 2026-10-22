@@ -365,6 +365,9 @@ def _collect_surface(
             inv += browser_recon(target, sandbox_client, pages=_pages,
                                  session_headers=session_headers, log=log)
     inv = _dedup(inv)
+    if deep_tools:
+        inv += arjun_param_discovery(target, inv, sandbox_client, session_headers, log=log)
+        inv = _dedup(inv)
 
     fp = fingerprint(target, request_fn)
     header = f"Fingerprint: server={fp.get('server') or '?'}; tech={', '.join(fp.get('tech') or []) or '?'}"
@@ -655,6 +658,77 @@ def fingerprint(target: str, request_fn: RequestFn) -> dict:
         "via": h.get("via", ""),
         "tech": tech,
     }
+
+
+def _arjun_params(data) -> list[str]:
+    """Collect parameter names from arjun's JSON, tolerant of version differences."""
+    found: list[str] = []
+    if isinstance(data, dict):
+        if isinstance(data.get("params"), list):
+            found += [str(x) for x in data["params"]]
+        for v in data.values():
+            if isinstance(v, dict) and isinstance(v.get("params"), list):
+                found += [str(x) for x in v["params"]]
+    elif isinstance(data, list):
+        for v in data:
+            if isinstance(v, dict) and isinstance(v.get("params"), list):
+                found += [str(x) for x in v["params"]]
+    return [p for p in found if p]
+
+
+def arjun_param_discovery(target, inventory, sandbox_client, session_headers=None,
+                          log: Callable[[str], None] = lambda m: None, cap: int = 3) -> list[dict]:
+    """Brute-force HIDDEN parameters on a few GET endpoints with arjun (in-sandbox).
+    Reveals params that feed injection/IDOR but never appear in links or forms. Bounded;
+    degrades silently if arjun is not in the image."""
+    if sandbox_client is None:
+        return []
+    import json
+    from urllib.parse import urlparse
+    cand, seen = [], set()
+    for it in inventory or []:
+        if (it.get("method") or "GET").upper() != "GET":
+            continue
+        if it.get("source") not in ("link", "content-discovery", "html", "api-spec",
+                                    "form", "browser-form"):
+            continue
+        u = it.get("url", "")
+        if not u or u in seen:
+            continue
+        seen.add(u)
+        cand.append(u)
+        if len(cand) >= cap:
+            break
+    if not cand:
+        return []
+    hdr = "".join(f" -H '{k}: {v}'" for k, v in (session_headers or {}).items())
+    out: list[dict] = []
+    for i, u in enumerate(cand):
+        of = f"/workspace/arjun_{i}.json"
+        cmd = (f"arjun -u '{u}' -m GET -q -t 10 -oJ {of}{hdr} >/dev/null 2>&1; "
+               f"cat {of} 2>/dev/null")
+        try:
+            r = sandbox_client.exec(cmd, timeout_ms=120_000)
+        except Exception as e:
+            log(f"arjun error: {e}")
+            break
+        txt = (getattr(r, "stdout", "") or "").strip()
+        if not txt:
+            if getattr(r, "exit_code", 0) == 127 or "not found" in (getattr(r, "stderr", "") or "").lower():
+                log("arjun not available in the sandbox image (skip)")
+                return []
+            continue
+        try:
+            params = _arjun_params(json.loads(txt))
+        except Exception:
+            continue
+        if params:
+            pr = urlparse(u)
+            out.append({"url": f"{pr.scheme}://{pr.netloc}{pr.path}", "method": "GET",
+                        "params": sorted(set(params)), "source": "arjun"})
+    if out:
+        log(f"arjun: discovered hidden param(s) on {len(out)} endpoint(s)")
+    return out
 
 
 def content_discovery(
