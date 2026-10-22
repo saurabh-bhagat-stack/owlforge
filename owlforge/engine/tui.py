@@ -1,40 +1,49 @@
-"""Interactive scan dashboard (Textual).
+"""Interactive scan dashboard (Textual) — narrative activity feed.
 
-Full-screen, keyboard- and mouse-driven view shown with `owlforge run -D`:
-  * a status bar (target / phase / elapsed / live counts),
-  * a SCROLLABLE, SELECTABLE findings table (Enter or click a row -> detail screen),
-  * a SCROLLABLE event log.
+Shown with `owlforge run -D`. Responsive grid:
+  * status bar + phase progress,
+  * a NARRATIVE activity feed (what owlforge is doing and why — deterministic lines from
+    real events; the agent's own reasoning is shown dim and tagged `thinking`, never as a
+    proven fact),
+  * a scrollable/selectable findings table (Enter/click -> detail),
+  * a "current target" card (endpoint, params, class, turn),
+  * a surface panel (discovered endpoints + params),
+  * a persistent steer input (type a note; the orchestrator folds it into guidance),
+  * `L` opens the raw tool-event log.
 
-The scan runs in a background worker thread so the UI stays responsive; the Emitter
-posts events to the app through a thread-safe sink, and the findings table refreshes from
-the store on a timer (so confirmations from the eager validator appear live). The app
-stays open when the scan finishes so findings can be browsed; press q to quit.
+The scan runs in a daemon thread so the UI stays responsive and Ctrl-C exits cleanly.
 """
 
 from __future__ import annotations
 
+import re
 import threading
 import time
+from collections import deque
+from urllib.parse import urlsplit
 
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, VerticalScroll
+from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import DataTable, Footer, Input, RichLog, Static
 
-_SEV_STYLE = {"critical": "bold red", "high": "red", "medium": "yellow",
-              "low": "cyan", "info": "dim"}
+_SEV_STYLE = {"critical": "bold red", "high": "red", "medium": "yellow", "low": "cyan", "info": "dim"}
 _SEV_RANK = {"critical": 4, "high": 3, "medium": 2, "low": 1, "info": 0}
 _STATUS_STYLE = {"validated": "bold green", "candidate": "yellow", "manual": "yellow"}
 
+# coarse phase ordering for the progress bar
+_STAGES = ["starting", "recon", "hunt", "deterministic passes", "validation", "reporting", "complete"]
 _PHASES = (
-    ("reporting", "reporting"), ("validation", "validation"), ("deepen", "deepening"),
-    ("final validation", "validation"), ("orchestrator", "hunt"), ("[specialist:", "hunt"),
-    ("pre-probe", "hunt"), ("oast", "deterministic passes"), ("access-control", "deterministic passes"),
-    ("csrf", "deterministic passes"), ("smuggle", "deterministic passes"),
-    ("graphql", "deterministic passes"), ("client-side", "deterministic passes"),
-    ("collapse", "reporting"), ("dedupe", "reporting"),
+    ("reporting", "reporting"), ("collapse", "reporting"), ("dedupe", "reporting"),
+    ("final validation", "validation"), ("validation", "validation"), ("deepen", "validation"),
+    ("oast", "deterministic passes"), ("access-control", "deterministic passes"),
+    ("csrf", "deterministic passes"), ("cors", "deterministic passes"),
+    ("smuggle", "deterministic passes"), ("graphql", "deterministic passes"),
+    ("session", "deterministic passes"), ("client-side", "deterministic passes"),
+    ("business-logic", "deterministic passes"),
+    ("orchestrator", "hunt"), ("[specialist:", "hunt"), ("pre-probe", "hunt"), ("recon", "recon"),
 )
 
 
@@ -44,6 +53,88 @@ def _phase_of(message: str) -> str | None:
         if key in low:
             return label
     return None
+
+
+# ----------------------------------------------------------------------------------------
+# Narration: map a raw (type, message) event to a human activity line (or None to skip).
+# Deterministic — it only re-phrases facts already in the event; it never invents anything.
+# ----------------------------------------------------------------------------------------
+_SPEC_TITLES = {"sqli": "SQL injection", "xss": "XSS", "access_control": "access-control",
+                "ssrf_redirect": "SSRF/redirect", "rce": "RCE", "ssti": "template injection",
+                "xxe": "XXE", "path_traversal": "path traversal", "open_redirect": "open redirect",
+                "csrf": "CSRF", "nosql": "NoSQL", "graphql": "GraphQL", "crlf": "CRLF",
+                "file_upload": "file upload", "deserialization": "deserialization"}
+_SPEC_RE = re.compile(r"\[specialist:([a-z_]+)\]\s*(.*)", re.I)
+_HTTP_RE = re.compile(r"http_request\s+([A-Z]+)\s+(\S+)")
+
+
+def narrate(type_: str, message: str) -> Text | None:
+    m = message or ""
+    low = m.lower()
+    if type_ == "think":
+        return _line("thinking  ", "bold cyan", m[:200], "dim")
+    if type_ == "finding_validated":
+        return _line("✓ confirmed  ", "bold green", m.replace("VALIDATED:", "").strip(), "white")
+    if type_ == "finding":
+        return _line("candidate  ", "yellow", m.replace("candidate filed:", "").strip(), "white")
+    if type_ == "error":
+        return _line("error  ", "bold red", m, "red")
+    if type_ == "tool_call":
+        hm = _HTTP_RE.search(m)
+        if hm:
+            return _line("  probe ", "dim", f"{hm.group(1)} {_short(hm.group(2))}", "dim")
+        if m.startswith("exec_command"):
+            return _line("  run ", "dim", m[len("exec_command"):].strip(" :")[:80], "dim")
+        return None
+    if type_ == "tool_result":
+        mm = re.search(r"->\s*(?:status=)?(\d{3})", m)
+        if mm and mm.group(1)[0] in "45":          # only surface 4xx/5xx (interesting)
+            return _line("    → ", "dim", mm.group(1), "yellow")
+        return None
+    if type_ == "status":
+        sm = _SPEC_RE.search(m)
+        if sm:
+            cls = sm.group(1).lower()
+            rest = sm.group(2)
+            title = _SPEC_TITLES.get(cls, cls)
+            if "skipped" in rest:
+                return None
+            if "pre-probe auto-filed" in rest:
+                return _line(f"{title} ▸ ", "bold yellow", "pre-probe confirmed a finding", "white")
+            if "testing" in rest:
+                return _line(f"{title} ▸ ", "bold yellow", rest.strip(), "white")
+            return _line(f"{title} ▸ ", "bold yellow", rest.strip(), "white")
+        for key, label, st in (
+            ("recon-summary:", "recon", "white"), ("[reauth]", "re-auth", "yellow"),
+            ("[steer]", "steer", "magenta"), ("oast:", "oast", "white"),
+            ("cors:", "cors", "white"), ("csrf:", "csrf", "white"),
+            ("access-control:", "access-control", "white"), ("deepened:", "deepen", "cyan"),
+            ("validation —", "validation", "white"), ("collapse —", "report", "dim"),
+            ("dedupe —", "report", "dim"), ("reporting phase", "report", "dim"),
+            ("smuggle:", "smuggle", "white"), ("sqlmap:", "sqlmap", "white"),
+            ("graphql:", "graphql", "white"),
+        ):
+            if key in low:
+                return _line(f"{label}  ", "cyan", m.split(key, 1)[-1].strip() or m, st)
+        return None
+    if type_ == "log" and ("[reauth]" in low or "blocked duplicate" in low):
+        return _line("  note  ", "dim", m, "dim")
+    return None
+
+
+def _line(tag: str, tag_style: str, body: str, body_style: str) -> Text:
+    t = Text()
+    t.append(tag, style=tag_style)
+    t.append(body, style=body_style)
+    return t
+
+
+def _short(url: str) -> str:
+    try:
+        sp = urlsplit(url)
+        return (sp.path or "/") + (("?" + sp.query) if sp.query else "")
+    except Exception:
+        return url[:80]
 
 
 class _TuiSink:
@@ -60,8 +151,6 @@ class _TuiSink:
 
 
 class FindingDetail(ModalScreen):
-    """Scrollable detail view for one finding."""
-
     BINDINGS = [Binding("escape,q", "dismiss", "Close")]
 
     def __init__(self, finding: dict) -> None:
@@ -88,10 +177,29 @@ class FindingDetail(ModalScreen):
         self.app.pop_screen()
 
 
-class AuthModal(ModalScreen):
-    """Shown when the scan hits a login/MFA challenge mid-run: the operator completes
-    the login (including OTP/MFA) in the sandbox browser, then dismisses to continue."""
+class RawLogScreen(ModalScreen):
+    """The full raw tool-event stream (for debugging), behind the `L` key."""
 
+    BINDINGS = [Binding("escape,q,l", "dismiss", "Close")]
+
+    def __init__(self, lines: list[tuple[str, str]]) -> None:
+        super().__init__()
+        self._lines = lines
+
+    def compose(self) -> ComposeResult:
+        log = RichLog(id="detail", highlight=False, markup=False, wrap=False)
+        yield log
+
+    def on_mount(self) -> None:
+        log = self.query_one("#detail", RichLog)
+        for type_, message in self._lines[-1000:]:
+            log.write(f"[{type_}] {message}"[:1000])
+
+    def action_dismiss(self) -> None:
+        self.app.pop_screen()
+
+
+class AuthModal(ModalScreen):
     BINDINGS = [Binding("escape,enter,space", "done", "Done")]
 
     def __init__(self, novnc_url: str, done_event=None) -> None:
@@ -102,9 +210,8 @@ class AuthModal(ModalScreen):
     def compose(self) -> ComposeResult:
         t = Text()
         t.append("Authentication needed\n\n", style="bold yellow")
-        t.append("The scan hit a login / MFA challenge. Open this URL, complete the "
-                 "login\n(password, OTP, push, CAPTCHA), then press Enter to continue:\n\n",
-                 style="white")
+        t.append("The scan hit a login / MFA challenge. Open this URL, complete the login\n"
+                 "(password, OTP, push, CAPTCHA), then press Enter to continue:\n\n", style="white")
         t.append(self._url + "\n", style="cyan")
         yield VerticalScroll(Static(t), id="detail")
 
@@ -119,9 +226,15 @@ class AuthModal(ModalScreen):
 
 class ScanApp(App):
     CSS = """
-    #status { height: 4; background: $panel; color: $text; padding: 0 1; border: round $primary; }
-    #findings { width: 62%; border: round $accent; }
-    #log { border: round $surface; }
+    #status { height: 4; background: $panel; color: $text; padding: 0 1; border: round $accent; }
+    #main { height: 1fr; }
+    #activity { width: 2fr; border: round $accent; padding: 0 1; }
+    #side { width: 1fr; }
+    #findings { height: 42%; border: round $warning; }
+    #target { height: 8; border: round $primary; padding: 0 1; }
+    #surface { height: 1fr; border: round $surface; }
+    #steer { dock: bottom; height: 3; border: round $accent; }
+    #filter { display: none; }
     #detail { padding: 1 2; }
     """
     BINDINGS = [
@@ -130,7 +243,7 @@ class ScanApp(App):
         Binding("s", "sort", "Sort"),
         Binding("v", "sev", "Severity"),
         Binding("slash", "filter", "Filter"),
-        Binding("m", "steer", "Steer"),
+        Binding("l", "rawlog", "Raw log"),
     ]
 
     def __init__(self, assessment_id: str, target: str, model: str, scan_fn) -> None:
@@ -146,33 +259,43 @@ class ScanApp(App):
         self.result_summary = ""
         self.result_report = None
         self._filter = ""
-        self._min_sev = -1       # -1 = all; else a _SEV_RANK floor
-        self._sort_key = "sev"   # sev | status | title
+        self._min_sev = -1
+        self._sort_key = "sev"
         self._table_sig = None
+        self._surface_sig = None
         self._steer: list[str] = []
         self._steer_lock = threading.Lock()
+        self._raw: deque[tuple[str, str]] = deque(maxlen=2000)
+        self._cur_class = ""
+        self._cur_target = ""
+        self._cur_method = ""
+        self._cur_turn = ""
 
     def compose(self) -> ComposeResult:
         yield Static(id="status")
-        with Horizontal():
-            yield DataTable(id="findings", zebra_stripes=True, cursor_type="row")
-            yield RichLog(id="log", highlight=False, markup=False, wrap=False, max_lines=2000)
+        with Horizontal(id="main"):
+            yield RichLog(id="activity", highlight=False, markup=False, wrap=True, max_lines=1500)
+            with Vertical(id="side"):
+                yield DataTable(id="findings", zebra_stripes=True, cursor_type="row")
+                yield Static(id="target")
+                yield DataTable(id="surface", cursor_type="row")
+        yield Input(placeholder="steer the scan — type a note, Enter to send", id="steer")
         yield Input(placeholder="filter findings — Enter to apply, empty to clear", id="filter")
-        yield Input(placeholder="steer the scan — a note the next specialists will see", id="steer")
         yield Footer()
 
     def on_mount(self) -> None:
-        dt = self.query_one("#findings", DataTable)
-        dt.add_columns("SEV", "STATUS", "FINDING", "ENDPOINT")
+        ft = self.query_one("#findings", DataTable)
+        ft.add_columns("SEV", "STATUS", "FINDING")
+        sf = self.query_one("#surface", DataTable)
+        sf.add_columns("ENDPOINT", "PARAMS")
         self.query_one("#filter", Input).display = False
-        self.query_one("#steer", Input).display = False
-        dt.focus()
+        ft.focus()
         self.set_interval(0.6, self._refresh)
         self._update_status()
         self._scan_thread = threading.Thread(target=self._scan, name="owlforge-scan", daemon=True)
         self._scan_thread.start()
 
-    # ---- scan worker (background thread) --------------------------------------------
+    # ---- scan worker (daemon thread) -------------------------------------------------
     def _scan(self) -> None:
         from owlforge.engine.events import Emitter
         emit = Emitter(self.aid, dashboard=_TuiSink(self), persist=True)
@@ -181,10 +304,10 @@ class ScanApp(App):
             self.result_summary, self.result_report = summary, report
         except KeyboardInterrupt:
             self.result_status = "stopped"
-        except Exception as e:  # surface, don't crash the UI
+        except Exception as e:
             self.result_status = "failed"
             try:
-                self.call_from_thread(self._write_log, "error", f"{type(e).__name__}: {e}")
+                self.call_from_thread(self._activity_error, f"{type(e).__name__}: {e}")
             except Exception:
                 pass
         try:
@@ -194,17 +317,37 @@ class ScanApp(App):
 
     # ---- UI-thread handlers ----------------------------------------------------------
     def on_scan_event(self, type_: str, message: str) -> None:
-        self._write_log(type_, message)
-        if type_ == "status":
+        self._raw.append((type_, message))
+        # track current target/turn from the raw stream for the card
+        if type_ == "tool_call":
+            hm = _HTTP_RE.search(message or "")
+            if hm:
+                self._cur_method, self._cur_target = hm.group(1), hm.group(2)
+        elif type_ == "status":
+            sm = _SPEC_RE.search(message or "")
+            if sm:
+                self._cur_class = sm.group(1).lower()
+            tm = re.search(r"turn (\d+/\d+)", message or "")
+            if tm:
+                self._cur_turn = tm.group(1)
             self._phase = _phase_of(message) or self._phase
+        line = narrate(type_, message)
+        if line is not None:
+            try:
+                self.query_one("#activity", RichLog).write(line)
+            except Exception:
+                pass
+        if type_ == "status":
             self._update_status()
+            self._update_target()
 
-    def _write_log(self, type_: str, message: str) -> None:
+    def _activity_error(self, msg: str) -> None:
         try:
-            self.query_one("#log", RichLog).write(f"[{type_}] {message}"[:1000])
+            self.query_one("#activity", RichLog).write(_line("error  ", "bold red", msg, "red"))
         except Exception:
             pass
 
+    # ---- findings ---------------------------------------------------------------------
     def _findings(self) -> list[dict]:
         try:
             from sqlmodel import select
@@ -214,12 +357,10 @@ class ScanApp(App):
             with session() as s:
                 rows = s.exec(select(Finding).where(Finding.assessment_id == self.aid)).all()
             keep = [f for f in rows if f.status in ("validated", "candidate", "manual")]
-            keep.sort(key=lambda f: (f.status != "validated",
-                                     -_SEV_RANK.get((f.severity or "").lower(), 0)))
+            keep.sort(key=lambda f: (f.status != "validated", -_SEV_RANK.get((f.severity or "").lower(), 0)))
             return [{"id": f.id, "severity": f.severity or "info", "status": f.status,
-                     "title": f.title or "", "endpoint": f.endpoint or "",
-                     "method": f.method, "confidence": f.confidence,
-                     "technical_analysis": f.technical_analysis,
+                     "title": f.title or "", "endpoint": f.endpoint or "", "method": f.method,
+                     "confidence": f.confidence, "technical_analysis": f.technical_analysis,
                      "proof_of_concept": f.proof_of_concept, "impact": f.impact,
                      "remediation": f.remediation, "validation_note": f.validation_note,
                      "evidence": f.evidence} for f in keep]
@@ -227,7 +368,6 @@ class ScanApp(App):
             return []
 
     def _apply_view(self, rows: list[dict]) -> list[dict]:
-        """Filter + sort the findings for display per the current view state."""
         if self._min_sev >= 0:
             rows = [f for f in rows if _SEV_RANK.get(f["severity"].lower(), 0) >= self._min_sev]
         if self._filter:
@@ -242,88 +382,72 @@ class ScanApp(App):
             rows.sort(key=lambda f: (-_SEV_RANK.get(f["severity"].lower(), 0), f["status"] != "validated"))
         return rows
 
+    def _surface(self) -> list[tuple[str, str]]:
+        try:
+            from sqlmodel import select
+
+            from owlforge.store.db import session
+            from owlforge.store.models import SurfaceItem
+            with session() as s:
+                rows = s.exec(select(SurfaceItem).where(SurfaceItem.assessment_id == self.aid)).all()
+            out, seen = [], set()
+            for r in rows:
+                path = _short(r.url or "")
+                key = ((r.method or "GET"), path)
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append((f"{r.method or 'GET'} {path}"[:46], ",".join(r.params or [])[:22]))
+            return out
+        except Exception:
+            return []
+
     def _refresh(self) -> None:
         rows = self._apply_view(self._findings())
         self._row_cache = {f["id"]: f for f in rows}
-        sig = (self._filter, self._min_sev, self._sort_key,
-               tuple((f["id"], f["status"]) for f in rows))
-        if sig == self._table_sig:
-            self._update_status()
-            return
-        self._table_sig = sig
-        dt = self.query_one("#findings", DataTable)
-        cur = dt.cursor_row
-        dt.clear()
-        for f in rows:
-            sev = Text(f["severity"].upper()[:8], style=_SEV_STYLE.get(f["severity"].lower(), "white"))
-            st = Text(f["status"][:9], style=_STATUS_STYLE.get(f["status"], "white"))
-            dt.add_row(sev, st, (f["title"] or "")[:60], (f["endpoint"] or "")[:60], key=f["id"])
-        try:
-            if dt.row_count:
-                dt.move_cursor(row=min(max(cur, 0), dt.row_count - 1))
-        except Exception:
-            pass
+        sig = (self._filter, self._min_sev, self._sort_key, tuple((f["id"], f["status"]) for f in rows))
+        if sig != self._table_sig:
+            self._table_sig = sig
+            dt = self.query_one("#findings", DataTable)
+            cur = dt.cursor_row
+            dt.clear()
+            for f in rows:
+                sev = Text(f["severity"].upper()[:4], style=_SEV_STYLE.get(f["severity"].lower(), "white"))
+                st = Text(f["status"][:5], style=_STATUS_STYLE.get(f["status"], "white"))
+                dt.add_row(sev, st, (f["title"] or "")[:40], key=f["id"])
+            try:
+                if dt.row_count:
+                    dt.move_cursor(row=min(max(cur, 0), dt.row_count - 1))
+            except Exception:
+                pass
+        surf = self._surface()
+        ssig = tuple(surf)
+        if ssig != self._surface_sig:
+            self._surface_sig = ssig
+            sdt = self.query_one("#surface", DataTable)
+            sdt.clear()
+            for ep, params in surf[:200]:
+                sdt.add_row(ep, params)
         self._update_status()
-
-    def action_sort(self) -> None:
-        order = ["sev", "status", "title"]
-        self._sort_key = order[(order.index(self._sort_key) + 1) % len(order)]
-        self._table_sig = None
-        self._refresh()
-
-    def action_sev(self) -> None:
-        steps = [-1, 1, 2, 3, 4]       # all, low+, medium+, high+, critical
-        self._min_sev = steps[(steps.index(self._min_sev) + 1) % len(steps)]
-        self._table_sig = None
-        self._refresh()
-
-    def drain_steer(self) -> list[str]:
-        """Thread-safe: return and clear queued operator notes (read by the orchestrator)."""
-        with self._steer_lock:
-            out = self._steer[:]
-            self._steer.clear()
-            return out
-
-    def action_steer(self) -> None:
-        inp = self.query_one("#steer", Input)
-        inp.value = ""
-        inp.display = True
-        inp.focus()
-
-    def action_filter(self) -> None:
-        inp = self.query_one("#filter", Input)
-        inp.value = self._filter
-        inp.display = True
-        inp.focus()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "steer":
-            txt = (event.value or "").strip()
-            if txt:
-                with self._steer_lock:
-                    self._steer.append(txt)
-                self._write_log("note", f"steer queued: {txt[:80]}")
-            event.input.value = ""
-            event.input.display = False
-            self.query_one("#findings", DataTable).focus()
-            return
-        self._filter = (event.value or "").strip()
-        inp = self.query_one("#filter", Input)
-        inp.display = False
-        self.query_one("#findings", DataTable).focus()
-        self._table_sig = None
-        self._refresh()
+        self._update_target()
 
     def _update_status(self) -> None:
         el = int(time.time() - self._started)
         rows = getattr(self, "_row_cache", {})
         v = sum(1 for f in rows.values() if f["status"] == "validated")
         c = sum(1 for f in rows.values() if f["status"] in ("candidate", "manual"))
+        try:
+            stage = _STAGES.index("complete" if self._done else self._phase)
+        except ValueError:
+            stage = 1
+        bar = "█" * (stage * 4) + "─" * ((len(_STAGES) - 1) * 4 - stage * 4)
         t = Text()
-        t.append("owlforge  ", style="bold cyan")
-        t.append(f"{self.target}\n", style="white")
-        t.append(f"phase {self._phase}", style="bold yellow")
-        t.append(f"   {el // 60:02d}:{el % 60:02d}", style="dim")
+        t.append("owlforge  ", style="bold #fbbf24")
+        t.append(f"{self.target}", style="white")
+        t.append(f"   {self.model}\n", style="dim")
+        t.append(f"phase {self._phase if not self._done else self.result_status}", style="bold #fcd34d")
+        t.append(f"  {el // 60:02d}:{el % 60:02d}  ", style="dim")
+        t.append(bar, style="#fbbf24")
         t.append(f"   {v} validated", style="bold green")
         t.append(f" / {c} candidate", style="yellow")
         t.append(f"   sort:{self._sort_key}", style="dim")
@@ -332,9 +456,31 @@ class ScanApp(App):
         if self._filter:
             t.append(f" /{self._filter}", style="dim")
         if self._done:
-            t.append(f"   [{self.result_status.upper()} — q to quit]", style="bold")
+            t.append("   [q to quit]", style="bold")
         try:
             self.query_one("#status", Static).update(t)
+        except Exception:
+            pass
+
+    def _update_target(self) -> None:
+        t = Text()
+        t.append("current target\n", style="bold #9a7b4f")
+        if self._cur_target:
+            t.append(f"{self._cur_method} {_short(self._cur_target)}\n", style="#67e8f9")
+            sp = urlsplit(self._cur_target)
+            params = ",".join(dict.fromkeys(k for k in (sp.query or "").replace("&", "=").split("=")[::2] if k))
+            t.append(f"params: {params or '-'}\n", style="dim")
+        else:
+            t.append("warming up…\n", style="dim")
+        bits = []
+        if self._cur_class:
+            bits.append(f"class {_SPEC_TITLES.get(self._cur_class, self._cur_class)}")
+        if self._cur_turn:
+            bits.append(f"turn {self._cur_turn}")
+        if bits:
+            t.append("  ·  ".join(bits), style="dim")
+        try:
+            self.query_one("#target", Static).update(t)
         except Exception:
             pass
 
@@ -343,6 +489,35 @@ class ScanApp(App):
         self._refresh()
         self._phase = "complete"
         self._update_status()
+
+    # ---- steering ---------------------------------------------------------------------
+    def drain_steer(self) -> list[str]:
+        with self._steer_lock:
+            out = self._steer[:]
+            self._steer.clear()
+            return out
+
+    # ---- actions ----------------------------------------------------------------------
+    def action_sort(self) -> None:
+        order = ["sev", "status", "title"]
+        self._sort_key = order[(order.index(self._sort_key) + 1) % len(order)]
+        self._table_sig = None
+        self._refresh()
+
+    def action_sev(self) -> None:
+        steps = [-1, 1, 2, 3, 4]
+        self._min_sev = steps[(steps.index(self._min_sev) + 1) % len(steps)]
+        self._table_sig = None
+        self._refresh()
+
+    def action_filter(self) -> None:
+        inp = self.query_one("#filter", Input)
+        inp.value = self._filter
+        inp.display = True
+        inp.focus()
+
+    def action_rawlog(self) -> None:
+        self.push_screen(RawLogScreen(list(self._raw)))
 
     def action_open(self) -> None:
         dt = self.query_one("#findings", DataTable)
@@ -356,20 +531,34 @@ class ScanApp(App):
         if f:
             self.push_screen(FindingDetail(f))
 
-    def pause_for_auth(self, novnc_url: str, done_event=None) -> None:
-        """Show the auth modal (callable from the scan worker via call_from_thread)."""
-        self.push_screen(AuthModal(novnc_url, done_event))
-
     def on_data_table_row_selected(self, event) -> None:
         f = getattr(self, "_row_cache", {}).get(event.row_key.value)
         if f:
             self.push_screen(FindingDetail(f))
 
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "steer":
+            txt = (event.value or "").strip()
+            if txt:
+                with self._steer_lock:
+                    self._steer.append(txt)
+                self.query_one("#activity", RichLog).write(_line("steer  ", "bold magenta", txt, "white"))
+            event.input.value = ""
+            return
+        self._filter = (event.value or "").strip()
+        inp = self.query_one("#filter", Input)
+        inp.display = False
+        self.query_one("#findings", DataTable).focus()
+        self._table_sig = None
+        self._refresh()
+
+    def pause_for_auth(self, novnc_url: str, done_event=None) -> None:
+        self.push_screen(AuthModal(novnc_url, done_event))
+
 
 def run_scan_tui(assessment_id: str, target: str, model: str, scan_fn):
     """Run the scan inside the interactive dashboard. scan_fn(emit, steer_fn) ->
-    (summary, report).
-    Returns (status, summary, report_path) after the user quits."""
+    (summary, report). Returns (status, summary, report_path) after the user quits."""
     app = ScanApp(assessment_id, target, model, scan_fn)
     app.run()
     return app.result_status, app.result_summary, app.result_report

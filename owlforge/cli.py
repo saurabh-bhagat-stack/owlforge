@@ -148,6 +148,16 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
     report_path = None
     _examined: set[str] = set()
 
+    try:
+        from owlforge.engine.orchestrator import read_blackboard as _rb
+        _nsurf = len(_rb(aid))
+        _rs = f"recon-summary: mapped {_nsurf} endpoint(s); {auth_summary}"
+        if detected_tech:
+            _rs += "; tech " + ", ".join(detected_tech)
+        emit("status", _rs)
+    except Exception:
+        pass
+
     async def _validate_cb():
         # confirm a specialist's findings the moment it finishes, so they surface live
         await validate_findings(assessment_id=aid, sandbox=sandbox_client, emit=emit,

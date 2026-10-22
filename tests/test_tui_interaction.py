@@ -43,14 +43,16 @@ def test_full_interaction_cycle(tmp_path, monkeypatch):
         async with app.run_test(size=(100, 24)) as pilot:
             # feed a stream of log events -> the event pane fills and is scrollable
             for i in range(60):
-                app.on_scan_event("status" if i % 2 else "tool_call", f"event line {i}")
+                app.on_scan_event("finding_validated" if i % 2 else "tool_call",
+                                  f"VALIDATED: issue {i}" if i % 2 else
+                                  f"http_request GET https://t/e{i}")
             app._refresh()
             await pilot.pause()
 
             dt = app.query_one("#findings", DataTable)
             assert dt.row_count == 20, f"expected 20 rows, got {dt.row_count}"
-            log = app.query_one("#log", RichLog)
-            assert len(log.lines) > 20  # log populated and scrollable
+            activity = app.query_one("#activity", RichLog)
+            assert len(activity.lines) > 5  # narrative feed populated and scrollable
 
             # cursor scrolls with arrow keys (table is focused)
             start = dt.cursor_row
