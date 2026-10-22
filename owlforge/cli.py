@@ -576,6 +576,28 @@ def run(
         _added = persist_new(aid, _spec_items, cap=400)
         console.print(f"[dim]\\[spec] seeded {_added} endpoint(s) from the API description[/]")
 
+    # stateful seeding (deep-by-default): if the app lets you register, make a throwaway
+    # account (a 2nd identity); if it lets you create/upload, create a marker object and
+    # capture its id — so access-control/IDOR is tested on data owlforge created itself.
+    try:
+        from owlforge.engine.orchestrator import read_blackboard as _rbb
+        from owlforge.engine.recon import persist_new as _pn
+        from owlforge.engine.seed import register_account, seed_objects
+        _inv = _rbb(aid)
+        _slog = lambda m: console.print(rf"[dim]\[seed] {m}[/]")  # noqa: E731
+        if identity_set is None and session_headers:
+            identity_set = [{"label": "session", "role": "user", "headers": session_headers}]
+        _reg = register_account(_inv, sandbox_client, target, log=_slog)
+        if _reg and identity_set is not None:
+            identity_set.append(_reg)
+        _seeded = seed_objects(_inv, sandbox_client, session_headers, target, log=_slog)
+        if _seeded:
+            _pn(aid, _seeded, cap=400)
+            console.print(f"[dim]\\[seed] created {len(_seeded)} test object(s) for "
+                          "access-control testing[/]")
+    except Exception as e:
+        console.print(f"[yellow]seed step skipped: {type(e).__name__}: {e}[/]")
+
     import re as _re
     _tm = _re.search(r"tech=([^;\n]+)", surface_text or "")
     detected_tech = [t.strip() for t in _tm.group(1).split(",")] if _tm else []
