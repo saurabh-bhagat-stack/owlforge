@@ -96,7 +96,7 @@ class ScanApp(App):
     """
     BINDINGS = [
         Binding("q,ctrl+c", "quit", "Quit"),
-        Binding("enter", "open", "Details"),
+        Binding("d", "open", "Details"),
     ]
 
     def __init__(self, assessment_id: str, target: str, model: str, scan_fn) -> None:
@@ -122,6 +122,7 @@ class ScanApp(App):
     def on_mount(self) -> None:
         dt = self.query_one("#findings", DataTable)
         dt.add_columns("SEV", "STATUS", "FINDING", "ENDPOINT")
+        dt.focus()
         self.set_interval(0.6, self._refresh)
         self._update_status()
         self.run_worker(self._scan, thread=True, exclusive=True)
