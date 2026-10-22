@@ -33,6 +33,8 @@ _MAP: list[tuple[tuple[str, ...], float, str]] = [
      6.1, "CVSS:3.1/AV:N/AC:L/PR:N/UI:R/S:C/C:L/I:L/A:N"),
     (("graphql",), 5.3, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"),
     (("websocket",), 5.3, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:L/I:N/A:N"),
+    (("cross-origin resource sharing", "cors misconfiguration"),
+     7.5, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:L/A:N"),
     (("secret", "api key", "token", "credential", "password", "disclosure"),
      7.5, "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:U/C:H/I:N/A:N"),
     (("csp", "content-security", "hsts", "strict-transport", "x-content-type", "clickjack",

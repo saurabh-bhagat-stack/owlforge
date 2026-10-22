@@ -49,6 +49,8 @@ _CLASSMAP: list[tuple[tuple[str, ...], str, str, str]] = [
     (("request smuggling", "smuggl"), "request-smuggling", "CWE-444",
      "A05:2021-Security Misconfiguration"),
     (("websocket",), "websocket", "CWE-346", "A05:2021-Security Misconfiguration"),
+    (("cross-origin resource sharing", "cors misconfiguration"),
+     "cors", "CWE-942", "A05:2021-Security Misconfiguration"),
     (("secret", "api key", "token", "credential", "jwt", "password"),
      "info-disclosure", "CWE-200", "A02:2021-Cryptographic Failures"),
     (("csp", "hsts", "x-content-type", "clickjack", "cookie", "cors", "security header",

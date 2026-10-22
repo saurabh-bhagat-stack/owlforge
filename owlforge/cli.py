@@ -212,6 +212,9 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
         from owlforge.engine.csrf import csrf_scan
         csrf_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                   log=lambda m: emit("status", m))
+        from owlforge.engine.corsscan import cors_scan
+        cors_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                  log=lambda m: emit("status", m))
         from owlforge.engine.bizlogic import bizlogic_scan
         bizlogic_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                       log=lambda m: emit("status", m))
