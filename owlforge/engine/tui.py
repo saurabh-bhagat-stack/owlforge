@@ -88,6 +88,35 @@ class FindingDetail(ModalScreen):
         self.app.pop_screen()
 
 
+class AuthModal(ModalScreen):
+    """Shown when the scan hits a login/MFA challenge mid-run: the operator completes
+    the login (including OTP/MFA) in the sandbox browser, then dismisses to continue."""
+
+    BINDINGS = [Binding("escape,enter,space", "done", "Done")]
+
+    def __init__(self, novnc_url: str, done_event=None) -> None:
+        super().__init__()
+        self._url = novnc_url
+        self._event = done_event
+
+    def compose(self) -> ComposeResult:
+        t = Text()
+        t.append("Authentication needed\n\n", style="bold yellow")
+        t.append("The scan hit a login / MFA challenge. Open this URL, complete the "
+                 "login\n(password, OTP, push, CAPTCHA), then press Enter to continue:\n\n",
+                 style="white")
+        t.append(self._url + "\n", style="cyan")
+        yield VerticalScroll(Static(t), id="detail")
+
+    def action_done(self) -> None:
+        if self._event is not None:
+            try:
+                self._event.set()
+            except Exception:
+                pass
+        self.app.pop_screen()
+
+
 class ScanApp(App):
     CSS = """
     #status { height: 4; background: $panel; color: $text; padding: 0 1; border: round $primary; }
@@ -325,6 +354,10 @@ class ScanApp(App):
         f = getattr(self, "_row_cache", {}).get(key)
         if f:
             self.push_screen(FindingDetail(f))
+
+    def pause_for_auth(self, novnc_url: str, done_event=None) -> None:
+        """Show the auth modal (callable from the scan worker via call_from_thread)."""
+        self.push_screen(AuthModal(novnc_url, done_event))
 
     def on_data_table_row_selected(self, event) -> None:
         f = getattr(self, "_row_cache", {}).get(event.row_key.value)

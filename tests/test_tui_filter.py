@@ -103,3 +103,26 @@ def test_steer_queues_notes_for_the_orchestrator(tmp_path, monkeypatch):
             assert app.drain_steer() == []          # cleared after draining
 
     asyncio.run(_run())
+
+
+def test_auth_modal_opens_and_signals_done(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    import asyncio
+    import threading
+
+    from owlforge.engine.tui import AuthModal, ScanApp
+
+    async def _run():
+        app = ScanApp("a", "t", "m", scan_fn=lambda e, s: (None, None))
+        async with app.run_test(size=(100, 24)) as pilot:
+            await pilot.pause()
+            ev = threading.Event()
+            app.pause_for_auth("http://127.0.0.1:6080/vnc.html", ev)
+            await pilot.pause()
+            assert isinstance(app.screen, AuthModal)
+            await pilot.press("enter")          # operator finished the login
+            await pilot.pause()
+            assert ev.is_set()                  # worker is unblocked
+            assert not isinstance(app.screen, AuthModal)
+
+    asyncio.run(_run())
