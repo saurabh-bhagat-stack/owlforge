@@ -140,6 +140,83 @@ def init() -> None:
     console.print("[dim]Set your local model in the config's [llm] model field.[/]")
 
 
+@app.command()
+def doctor() -> None:
+    """Preflight: check the container engine, sandbox image, config, and model endpoint."""
+    import sys
+
+    from owlforge.config import config_path
+    ok = True
+
+    def line(status: str, label: str, detail: str = "", fix: str = "") -> None:
+        icon = {"ok": "[green]✓[/]", "warn": "[yellow]![/]", "fail": "[red]✗[/]"}[status]
+        console.print(f"  {icon} {label}" + (f"   [dim]{detail}[/]" if detail else ""))
+        if fix:
+            console.print(f"      [dim]→ {fix}[/]")
+
+    console.print("[bold]owlforge doctor[/]\n")
+    pv = sys.version_info
+    if pv >= (3, 11):
+        line("ok", "Python", f"{pv.major}.{pv.minor}.{pv.micro}")
+    else:
+        line("fail", "Python", f"{pv.major}.{pv.minor}", "need Python 3.11+")
+        ok = False
+
+    cp = config_path()
+    if cp.exists():
+        line("ok", "Config", str(cp))
+    else:
+        line("warn", "Config", "not initialized", "run `owlforge init`")
+    cfg = load_config()
+
+    eng = manager.container_engine()
+    ver = manager.engine_version(eng)
+    running = manager.docker_available()
+    if ver is None:
+        line("fail", "Container engine", f"`{eng}` not found on PATH",
+             "install Docker Desktop / colima / Rancher Desktop / Podman")
+        ok = False
+    elif not running:
+        line("fail", "Container engine", f"`{eng}` {ver} installed but not running",
+             manager.engine_start_hint(eng))
+        ok = False
+    else:
+        line("ok", "Container engine", f"`{eng}` {ver} running")
+
+    if running:
+        if manager.image_exists(cfg.sandbox.image):
+            line("ok", "Sandbox image", "present")
+        else:
+            line("warn", "Sandbox image", "not pulled yet",
+                 "`owlforge sandbox pull` (or it auto-pulls on the first run)")
+    else:
+        line("warn", "Sandbox image", "(skipped — engine not running)")
+
+    base, model = cfg.llm.base_url, cfg.llm.model
+    if not base or not model:
+        line("warn", "LLM endpoint", "not configured", f"set [llm] base_url + model in {cp}")
+    else:
+        reachable = False
+        try:
+            import httpx
+            httpx.get(base.rstrip("/").removesuffix("/v1") or base, timeout=4.0)
+            reachable = True
+        except Exception:
+            reachable = False
+        if reachable:
+            line("ok", "LLM endpoint", f"{model} @ {base}")
+        else:
+            line("warn", "LLM endpoint", f"{model} @ {base}",
+                 "endpoint not reachable — is your model server (Ollama/LM Studio/…) running?")
+
+    console.print()
+    if ok:
+        console.print("[green]Ready.[/]  owlforge run <target>")
+    else:
+        console.print("[red]Some checks failed[/] — fix the ✗ items above, then re-run `owlforge doctor`.")
+    raise typer.Exit(0 if ok else 1)
+
+
 def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_headers,
               identity_set, login_specs, auth_summary, max_turns, scope, emit,
               done_seed=None, checkpoint=None, detected_tech=None, steer_fn=None):

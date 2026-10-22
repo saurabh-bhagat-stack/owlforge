@@ -89,6 +89,23 @@ def _run(args: list[str], timeout: float = 60.0) -> subprocess.CompletedProcess:
     return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
 
 
+def engine_version(engine: str | None = None) -> str | None:
+    """The installed version of the engine CLI, or None if it is not on PATH."""
+    import re
+    import shutil
+    eng = engine or container_engine()
+    if not shutil.which(eng):
+        return None
+    try:
+        r = _run([eng, "--version"], timeout=10)
+        if r.returncode == 0:
+            m = re.search(r"(\d+\.\d+\.\d+)", r.stdout or "")
+            return m.group(1) if m else (r.stdout or "").strip()[:40]
+    except Exception:
+        pass
+    return None
+
+
 def docker_available() -> bool:
     try:
         return _run([container_engine(), "info"], timeout=10).returncode == 0

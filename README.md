@@ -129,6 +129,7 @@ owlforge init
 owlforge sandbox pull            # optional: pre-fetch the published image now
 #                                  (or build from source instead: owlforge sandbox build)
 owlforge sandbox status          # confirm: docker available + image present
+owlforge doctor                  # one-shot preflight: engine, image, config, model
 ```
 
 ### Keeping the sandbox current
