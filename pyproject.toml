@@ -21,10 +21,6 @@ classifiers = [
     "Topic :: Security",
 ]
 
-[project.urls]
-Homepage = "https://github.com/saurabh-bhagat-stack/owlforge"
-Repository = "https://github.com/saurabh-bhagat-stack/owlforge"
-Issues = "https://github.com/saurabh-bhagat-stack/owlforge/issues"
 
 # Phase 0 core deps — kept minimal so `pip install -e .` is fast and reliable.
 # Phase 1 added: openai (OpenAI-compatible transport), httpx. Later: instructor, tiktoken.
@@ -41,6 +37,11 @@ dependencies = [
     "platformdirs>=4.2",
     "textual>=0.60",
 ]
+
+[project.urls]
+Homepage = "https://github.com/saurabh-bhagat-stack/owlforge"
+Repository = "https://github.com/saurabh-bhagat-stack/owlforge"
+Issues = "https://github.com/saurabh-bhagat-stack/owlforge/issues"
 
 [project.optional-dependencies]
 dev = [
