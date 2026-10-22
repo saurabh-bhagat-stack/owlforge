@@ -169,7 +169,8 @@ class ScanApp(App):
         dt.focus()
         self.set_interval(0.6, self._refresh)
         self._update_status()
-        self.run_worker(self._scan, thread=True, exclusive=True)
+        self._scan_thread = threading.Thread(target=self._scan, name="owlforge-scan", daemon=True)
+        self._scan_thread.start()
 
     # ---- scan worker (background thread) --------------------------------------------
     def _scan(self) -> None:
