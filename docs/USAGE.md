@@ -19,6 +19,17 @@ checks, validation, and a report — all automatic. Each run gets an auto projec
 owlforge run ginandjuice.shop
 ```
 
+### Point it at an API description
+
+Give it an OpenAPI/Swagger file (JSON or YAML) or a Postman collection and owlforge
+derives the base URL and tests every operation — no crawling needed. Specs served by
+the target are also auto-discovered during recon.
+
+```bash
+owlforge run ./openapi.yaml            # OpenAPI 3 / Swagger 2 (json or yaml)
+owlforge run ./postman_collection.json # Postman v2.x collection
+```
+
 ## Steering it with `-m`
 
 `-m/--message` is optional, free-text, and the highest-priority guidance; it reaches the
