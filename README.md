@@ -116,6 +116,17 @@ owlforge sandbox build
 owlforge sandbox status          # confirm: docker available + image built
 ```
 
+### Keeping the sandbox current
+When a newer sandbox image is published, `owlforge run` notices (a quick,
+best-effort digest check — it never blocks and is skipped for locally-built
+images or when offline) and, interactively, asks before pulling:
+```bash
+owlforge run app.example            # prompts [y/N] if a newer image exists
+owlforge run app.example --pull     # pull the latest first, then scan
+owlforge run app.example --no-pull  # skip the check entirely (offline/CI)
+owlforge sandbox update             # pull only if newer; or `sandbox pull` to force
+```
+
 ## Configure
 Edit `~/.owlforge/config.toml` and point it at your model:
 ```toml

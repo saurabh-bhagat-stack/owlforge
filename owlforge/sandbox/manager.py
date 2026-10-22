@@ -64,6 +64,71 @@ def build_image(image: str, context_dir: str | Path, log: Logger = print) -> boo
     return proc.returncode == 0
 
 
+def local_digest(image: str) -> str | None:
+    """The repo digest of the locally-present image (what was pulled). None when the
+    image is a LOCAL BUILD (no RepoDigests) or absent -> caller treats None as 'cannot
+    compare, do not nudge'."""
+    try:
+        r = _run(["docker", "image", "inspect", image,
+                  "--format", "{{range .RepoDigests}}{{.}} {{end}}"], timeout=15)
+        if r.returncode != 0:
+            return None
+        for token in (r.stdout or "").split():
+            if "@sha256:" in token:
+                return token.split("@", 1)[1]
+    except Exception:
+        return None
+    return None
+
+
+def remote_digest(image: str) -> str | None:
+    """The registry manifest digest for `image` (metadata only, no layer download).
+    None if offline / unauthorised / not found."""
+    try:
+        r = _run(["docker", "buildx", "imagetools", "inspect", image], timeout=25)
+        if r.returncode == 0:
+            for line in (r.stdout or "").splitlines():
+                ls = line.strip()
+                if ls.lower().startswith("digest:"):
+                    return ls.split(":", 1)[1].strip()
+    except Exception:
+        pass
+    try:
+        import json as _json
+        r = _run(["docker", "manifest", "inspect", "-v", image], timeout=25)
+        if r.returncode == 0:
+            data = _json.loads(r.stdout or "null")
+            if isinstance(data, dict):
+                d = (data.get("Descriptor") or {}).get("digest")
+                if d:
+                    return d
+            elif isinstance(data, list) and data:
+                d = (data[0].get("Descriptor") or {}).get("digest")
+                if d:
+                    return d
+    except Exception:
+        pass
+    return None
+
+
+def update_available(image: str) -> bool | None:
+    """True if the registry has a newer image than the local copy; False if up to date;
+    None if undeterminable (local build, offline, registry error) -> caller skips."""
+    local = local_digest(image)
+    if local is None:
+        return None
+    remote = remote_digest(image)
+    if remote is None:
+        return None
+    return local != remote
+
+
+def pull_image(image: str, log: Logger = print) -> bool:
+    log(f"pulling {image} ...")
+    proc = subprocess.run(["docker", "pull", image], text=True)
+    return proc.returncode == 0
+
+
 def _free_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("127.0.0.1", 0))

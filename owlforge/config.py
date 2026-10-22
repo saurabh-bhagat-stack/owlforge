@@ -29,7 +29,7 @@ class LLMConfig(BaseModel):
 
 class SandboxConfig(BaseModel):
     enabled: bool = True
-    image: str = "ghcr.io/saurabh-bhagat-stack/owlforge-sandbox:dev"
+    image: str = "ghcr.io/saurabh-bhagat-stack/owlforge-sandbox:latest"
     # Daemon port published to 127.0.0.1 on the host (Phase 2).
     agentd_port: int = 47130
 
@@ -106,7 +106,7 @@ context_window = 0   # 0 = auto-detect from the model
 
 [sandbox]
 enabled = true
-image = "ghcr.io/saurabh-bhagat-stack/owlforge-sandbox:dev"
+image = "ghcr.io/saurabh-bhagat-stack/owlforge-sandbox:latest"
 agentd_port = 47130
 
 [runner]

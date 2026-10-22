@@ -42,6 +42,35 @@ console = Console()
 _SEV_RANKS = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
 
 
+def _maybe_update_image(image: str, *, pull: bool, no_pull: bool, interactive: bool) -> None:
+    """Best-effort sandbox-image freshness check. Never blocks a scan: skips silently
+    for local builds / offline / registry errors. --no-pull skips; --pull always pulls;
+    otherwise an interactive run prompts (default N) when a newer image exists, and a
+    headless run just prints a one-line notice."""
+    _slog = lambda m: console.print(rf"[dim]\[sandbox] {m}[/]")  # noqa: E731
+    if no_pull:
+        return
+    if pull:
+        manager.pull_image(image, log=_slog)
+        return
+    try:
+        avail = manager.update_available(image)
+    except Exception:
+        return
+    if not avail:  # False or None -> nothing to do
+        return
+    if not interactive:
+        console.print(rf"[yellow]\[sandbox] a newer image is available for {image}; "
+                      "re-run with --pull to update (using the current image).[/]")
+        return
+    console.print(r"[yellow]\[sandbox] a newer sandbox image is available.[/]")
+    ans = typer.prompt("Pull the latest image now? [y/N]", default="n", show_default=False)
+    if str(ans).strip().lower() in ("y", "yes"):
+        manager.pull_image(image, log=_slog)
+    else:
+        console.print(r"[dim]\[sandbox] using the current image[/]")
+
+
 def _meets_fail_threshold(validated_severities, fail_on) -> bool | None:
     """True if any validated severity is at/above fail_on; None if fail_on is
     unset or unknown (caller treats None as 'do not gate')."""
@@ -248,6 +277,10 @@ def run(
         False, "--non-interactive", "-n",
         help="Headless: plain output, no dashboard, CI-friendly exit codes "
              "(0 clean / 2 findings at/above --fail-on / 1 error)."),
+    pull: bool = typer.Option(
+        False, "--pull", help="Pull the latest sandbox image before scanning."),
+    no_pull: bool = typer.Option(
+        False, "--no-pull", help="Skip the sandbox-image freshness check entirely."),
 ) -> None:
     """Run a deep assessment against TARGET. Thorough by default — recon, interactive SPA
     mapping, pre-probe, specialists, validation, and reporting all run automatically."""
@@ -322,6 +355,8 @@ def run(
         console.print(f"[red]Sandbox image not built ({cfg.sandbox.image}). Run "
                       "`owlforge sandbox build` first.[/]")
         raise typer.Exit(1)
+    _maybe_update_image(cfg.sandbox.image, pull=pull, no_pull=no_pull,
+                        interactive=console.is_terminal and not non_interactive)
     try:
         sandbox_session = manager.start(
             cfg.sandbox.image, workspace=str(assessments_dir() / aid), log=sblog)
@@ -711,6 +746,33 @@ def sandbox_build() -> None:
     ok = manager.build_image(cfg.sandbox.image, ctx_dir, log=lambda m: console.print(f"[dim]{m}[/]"))
     console.print(f"[green]built {cfg.sandbox.image}[/]" if ok else "[red]build failed[/]")
     raise typer.Exit(0 if ok else 1)
+
+
+@sandbox_app.command("pull")
+def sandbox_pull() -> None:
+    """Pull the latest sandbox image from the registry."""
+    cfg = load_config()
+    if not manager.docker_available():
+        console.print("[red]Docker is not running.[/]")
+        raise typer.Exit(1)
+    ok = manager.pull_image(cfg.sandbox.image, log=lambda m: console.print(f"[dim]{m}[/]"))
+    console.print("[green]image pulled[/]" if ok else "[red]pull failed[/]")
+    raise typer.Exit(0 if ok else 1)
+
+
+@sandbox_app.command("update")
+def sandbox_update() -> None:
+    """Pull the sandbox image only if the registry has a newer one."""
+    cfg = load_config()
+    avail = manager.update_available(cfg.sandbox.image)
+    if avail is None:
+        console.print("[dim]can't determine freshness (local build or registry "
+                      "unreachable); nothing to do.[/]")
+    elif not avail:
+        console.print("[green]sandbox image is already up to date[/]")
+    else:
+        manager.pull_image(cfg.sandbox.image, log=lambda m: console.print(f"[dim]{m}[/]"))
+        console.print("[green]updated[/]")
 
 
 @sandbox_app.command("status")

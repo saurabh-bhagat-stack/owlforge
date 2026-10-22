@@ -30,6 +30,10 @@ false-positive-averse validation.
 - **Reports:** Markdown, HTML, SARIF 2.1.0 with CVSS 3.1 + CWE + OWASP; cross-run diff.
 - **Resumable/checkpointed runs**; provider-agnostic LLM context auto-detection.
 - **CI gating:** `--fail-on <severity>` + `-n` headless + exit codes (0/1/2).
+- **Sandbox image updates:** `owlforge run` does a best-effort freshness check and
+  (interactively) offers to pull a newer image; `--pull`/`--no-pull` flags and
+  `owlforge sandbox pull` / `owlforge sandbox update`. Default image tag is
+  `:latest` (published by the release workflow).
 
 ### Notes
 - Local ≤27B models validate reliably; autonomous discovery scales with model strength.
