@@ -296,6 +296,9 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
         from owlforge.engine.accesscontrol import access_control_scan
         access_control_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                             identity_set, log=lambda m: emit("status", m))
+        from owlforge.engine.authmatrix import access_matrix_scan
+        access_matrix_scan(aid, sandbox_client, session_headers, identity_set,
+                           log=lambda m: emit("status", m))
         from owlforge.engine.authlogic import jwt_scan
         jwt_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                  log=lambda m: emit("status", m))
