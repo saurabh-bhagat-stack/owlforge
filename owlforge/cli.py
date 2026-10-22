@@ -269,7 +269,16 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
             else:
                 emit("log", "[reauth] could not refresh the session automatically")
     try:
+        from owlforge.engine.appmodel import build_app_model
         from owlforge.engine.orchestrator import read_blackboard
+        from owlforge.engine.scenarios import mass_assignment_scan, run_business_logic_specialist
+        from owlforge.store.models import SurfaceItem
+        with session() as _ms:
+            _seeded_urls = [r.url for r in _ms.exec(select(SurfaceItem).where(
+                SurfaceItem.assessment_id == aid, SurfaceItem.source == "seeded")).all() if r.url]
+        _model = build_app_model(read_blackboard(aid), identity_set, _seeded_urls, detected_tech or [])
+        if _model.is_interesting():
+            emit("status", "app-model: " + _model.summary().replace(chr(10), " | "))
         from owlforge.engine.stored import stored_scan
         stored_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                     log=lambda m: emit("status", m))
@@ -299,6 +308,8 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
         from owlforge.engine.authmatrix import access_matrix_scan
         access_matrix_scan(aid, sandbox_client, session_headers, identity_set,
                            log=lambda m: emit("status", m))
+        mass_assignment_scan(aid, _model, sandbox_client, session_headers,
+                             log=lambda m: emit("status", m))
         from owlforge.engine.authlogic import jwt_scan
         jwt_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                  log=lambda m: emit("status", m))
@@ -332,6 +343,11 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
                          log=lambda m: emit("status", m))
         subdomain_takeover_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                                 target=target, log=lambda m: emit("status", m))
+        if client is not None:
+            asyncio.run(run_business_logic_specialist(
+                client=client, sandbox=sandbox_client, assessment_id=aid, target=target,
+                model=_model, emit=emit, session_headers=session_headers,
+                scan_mode="deep", max_turns=max(6, max_turns // 2)))
     except Exception as e:
         emit("log", f"stored pass failed: {type(e).__name__}: {e}")
     emit("status", "final validation sweep")
