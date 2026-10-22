@@ -34,28 +34,43 @@ milestone build order live in [`WORKFLOW.md`](WORKFLOW.md); the recon design in
 ## 2. High-level architecture
 
 ```mermaid
-flowchart LR
+flowchart TB
   CLI["owlforge run &lt;target&gt;"] --> RECON
   subgraph ENGINE["engine (Python, host)"]
+    direction TB
     RECON["recon<br/>crawl · SPA map · katana · ffuf · arjun · nuclei · WAF"]
-    --> UND["understand<br/>secrets · JS→API"]
-    --> AUTH["auth<br/>login-harvest · identities · SSO"]
-    --> PLAN["plan<br/>classify + pre-probe (auto-file)"]
-    --> HUNT["specialists<br/>SQLi XSS SSRF SSTI RCE XXE … + bypass"]
-    --> OAST["OAST<br/>blind SSRF/XXE/cmd · OOB SQLi · Log4Shell"]
-    --> AC["access-control<br/>IDOR · privesc · missing-authn"]
-    --> DP["deterministic passes<br/>CSRF · CORS · session · GraphQL · Log4Shell/JNDI · sqlmap"]
-    --> AL["auth-logic<br/>JWT alg=none · weak secret"]
-    --> VAL["validate<br/>evidence-gated · browser-exec XSS"]
-    --> REP["collapse · dedupe · chain<br/>report (md / html / sarif, CVSS)"]
+      --> UND["understand<br/>secrets · JS→API"]
+      --> AUTH["auth<br/>login-harvest · identities (TOTP) · SSO/MFA · re-auth"]
+      --> PLAN["plan<br/>classify + deterministic pre-probe (auto-files confirmed)"]
+
+    PLAN --> HUNT["specialists (per vuln class)<br/>SQLi XSS SSRF SSTI RCE XXE … + bypass loop"]
+    PLAN --> DET["deterministic passes"]
+
+    %% detection files findings; some passes carry their own proof, others need a re-test
+    HUNT -->|candidates · validated eagerly| SWEEP
+    DET --> DSELF["self-validating → VALIDATED<br/>OAST (blind/OOB/Log4Shell) · access-control · auth-logic (JWT) · CORS"]
+    DET --> DCAND["candidate<br/>CSRF · session/logout · business-logic · client-side"]
+    DCAND -->|candidate| SWEEP
+
+    SWEEP["validation<br/>re-test candidates (evidence-gated; XSS by browser execution)<br/>runs eagerly per-specialist + a final sweep"] --> SET
+    DSELF --> SET["validated findings"]
+    SET --> DEEP["sqlmap confirm (SQLi) · deepen"]
+      --> REP["collapse · dedupe · chain<br/>report (md / html / sarif · CVSS/CWE/OWASP)"]
   end
   ENGINE -->|"HTTP, bearer, 127.0.0.1"| SB
   subgraph SB["owlforge-sandbox (Docker, per run)"]
-    AGENTD["owlforge-agentd (FastAPI)<br/>/exec /http /render /map /xss_check<br/>/interact /oast/* /ws_probe /smuggle_probe"]
+    AGENTD["owlforge-agentd (FastAPI)<br/>/exec /http /render /map /xss_check<br/>/interact /oast/* /sso/* /ws_probe /smuggle_probe"]
     TOOLS["mitmproxy · Playwright Chromium<br/>nmap httpx nuclei ffuf katana wafw00f arjun sqlmap interactsh cloudflared"]
   end
   ENGINE --> STORE[("SQLite<br/>assessments · surface · findings · attempts · events")]
 ```
+
+> **Reading the flow:** detection and validation are *different* steps. The deterministic
+> passes that carry their own proof — OAST (callback), access-control (differential),
+> **auth-logic / JWT**, CORS — file findings as **validated** directly and skip the re-test.
+> Candidate findings (LLM specialists, CSRF, session/logout) go through **validation**, which
+> runs *eagerly* after each specialist plus a final sweep. That's why auth-logic appears
+> "before validate": it doesn't need it.
 
 
 ```
