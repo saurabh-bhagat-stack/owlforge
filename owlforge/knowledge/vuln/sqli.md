@@ -25,3 +25,9 @@ Keep proof read-only: extract version/current_user only — never write or drop.
 
 ## Example payloads
 `1'` · `1''` · `1' AND 1=1-- -` · `1' AND 1=2-- -` · `1) OR ('1'='1` · `1 ORDER BY 5-- -`
+
+## Deeper confirmation (sandbox tool)
+`sqlmap` is on PATH in the sandbox — use it via exec_command to confirm a candidate and
+fingerprint the DBMS, READ-ONLY: e.g.
+`sqlmap -u "<url>" --batch --smart --level=2 --risk=2 --technique=BET --banner --current-user --current-db`.
+Do NOT `--dump` sensitive tables; a confirmed injection + DBMS/user is enough proof.
