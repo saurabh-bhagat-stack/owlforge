@@ -107,7 +107,7 @@ and [`docs/recon-spec.md`](docs/recon-spec.md).
 
 ## Requirements
 - **Python 3.11+**
-- **A container engine** — for the sandbox (real tool execution). Docker Desktop, [colima](https://github.com/abiosoft/colima), or Rancher Desktop work out of the box. **Podman** works too: set `OWLFORGE_CONTAINER_ENGINE=podman` and owlforge calls `podman` directly (a shell `alias docker=podman` is *not* enough — owlforge runs the CLI via subprocess; the env var, the `podman-docker` shim, or a `docker`→`podman` symlink is).
+- **A container engine** — for the sandbox (real tool execution): Docker Desktop, [colima](https://github.com/abiosoft/colima), Rancher Desktop, **Podman**, or nerdctl. owlforge **auto-detects whichever engine is running** — no configuration needed. (To force a specific one, set `OWLFORGE_CONTAINER_ENGINE=podman`; see [Using Podman](#using-podman).)
 - **An OpenAI-compatible LLM endpoint** — local (Ollama / Jan / LM Studio / llama.cpp) or hosted.
 
 ## Full setup (from scratch)
@@ -125,11 +125,12 @@ pip install -e .                 # add ".[dev]" for tests/lint
 owlforge init
 
 # 4. start your container engine (Docker Desktop / colima / Rancher Desktop / Podman)
-#    the sandbox image is then pulled automatically on first run
-owlforge sandbox pull            # optional: pre-fetch the published image now
-#                                  (or build from source instead: owlforge sandbox build)
-owlforge sandbox status          # confirm: docker available + image present
-owlforge doctor                  # one-shot preflight: engine, image, config, model
+#    — owlforge auto-detects whichever is running; the image auto-pulls on first run.
+
+# 5. preflight — verifies engine, image, config and model, and tells you how to fix anything
+owlforge doctor
+#   (optional) pre-fetch the image now:  owlforge sandbox pull
+#   (optional) build it from source:     owlforge sandbox build
 ```
 
 ### Keeping the sandbox current
@@ -143,10 +144,14 @@ owlforge run app.example --no-pull  # skip the check entirely (offline/CI)
 owlforge sandbox update             # pull only if newer; or `sandbox pull` to force
 ```
 
-### Using Podman (instead of Docker)
+### Using Podman
 
-owlforge runs the container CLI via a subprocess, so a shell `alias docker=podman` is **not**
-enough. Point owlforge at podman with an environment variable — the syntax differs per shell:
+**Usually nothing to configure** — owlforge auto-detects a running Podman. Just make sure the
+Podman machine is up (`podman machine start`) and run `owlforge doctor` to confirm it's seen.
+
+You only need the env var below to **force** Podman (e.g. you have both Docker and Podman and
+want Podman). Note a shell `alias docker=podman` does **not** work — owlforge runs the CLI via
+subprocess — so use the environment variable (syntax differs per shell):
 
 | Shell | This session | Persistent |
 |---|---|---|
@@ -227,7 +232,7 @@ owlforge findings <id>             # findings for an assessment
 owlforge report <id>               # markdown report (--rebuild to regenerate)
 owlforge report <id> --format html # also HTML + SARIF; md|html|sarif|all
 owlforge diff   <id>               # NEW / FIXED / PERSISTING vs the previous run
-owlforge sandbox status            # docker + image state
+owlforge sandbox status            # engine + image state  (or `owlforge doctor`)
 ```
 
 The report and findings are also written under the assessment's workspace directory
