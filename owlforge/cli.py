@@ -357,9 +357,12 @@ def run(
     recon_pages = 40
     max_turns = 30
 
-    # auto project name: <host>-<shorthash> so repeat scans of a domain segregate
+    # auto project name: <host>-<shorthash>, filesystem-safe. The assessment id IS this
+    # name, so the on-disk folder ~/.owlforge/assessments/<project>/ is self-describing.
+    import re as _re0
     host = urlparse(target).netloc or target
-    project = f"{host}-{_hashlib.sha1(f'{target}{_time.time()}'.encode()).hexdigest()[:4]}"
+    _safehost = _re0.sub(r"[^A-Za-z0-9.-]", "-", host).strip("-") or "target"
+    project = f"{_safehost}-{_hashlib.sha1(f'{target}{_time.time()}'.encode()).hexdigest()[:6]}"
 
     try:
         client = make_client(cfg)
@@ -370,7 +373,7 @@ def run(
             f"{cfg.llm.base_url} actually serves, then re-run.[/]")
         raise typer.Exit(1) from None
 
-    aid = _new_id("asmt")
+    aid = project
     with session() as s:
         s.add(Assessment(id=aid, project_name=project, target=target,
                          instructions=message, scan_mode="deep", status="executing"))
@@ -458,14 +461,10 @@ def run(
     scope = build_scope(target, scope=scope_in, out_of_scope=scope_out, only=None)
 
     panel = [
-        f"id:      [bold cyan]{aid}[/]",
-        f"project: {project}",
+        f"project: [bold cyan]{project}[/]   [dim](~/.owlforge/assessments/{project}/)[/]",
         f"target:  {target}",
         f"model:   {cfg.llm.model} @ {cfg.llm.base_url}",
-        f"context: {client.context_window} ({client.context_source})",
         "sandbox: on",
-        f"auth:    {'operator identities' if identity_set else 'unauth -> auto-escalate (login-page harvest)'}",
-        "depth:   deep (recon + SPA map + pre-probe + specialists + validate + report)",
     ]
     console.print(Panel.fit(chr(10).join(panel), title="assessment started", border_style="cyan"))
 
