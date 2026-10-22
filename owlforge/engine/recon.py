@@ -812,21 +812,8 @@ def api_spec_discovery(target: str, request_fn: RequestFn, log: Callable[[str], 
         paths = spec.get("paths") if isinstance(spec, dict) else None
         if not isinstance(paths, dict):
             continue
-        out = []
-        for path, methods in paths.items():
-            if not isinstance(methods, dict):
-                continue
-            for method, op in methods.items():
-                if method.lower() not in ("get", "post", "put", "patch", "delete"):
-                    continue
-                params = []
-                if isinstance(op, dict):
-                    for pr in op.get("parameters", []) or []:
-                        if isinstance(pr, dict) and pr.get("name"):
-                            params.append(str(pr["name"]))
-                clean = origin + ("/" + path.lstrip("/")).split("{")[0].rstrip("/")
-                out.append({"url": clean or origin + "/" + path.lstrip("/"),
-                            "method": method.upper(), "params": sorted(set(params)), "source": "api-spec"})
+        from owlforge.engine.apispec import openapi_to_items
+        out = openapi_to_items(spec, origin)
         log(f"api spec {sp}: {len(paths)} path(s) -> {len(out)} operation(s)")
         return out
     return []

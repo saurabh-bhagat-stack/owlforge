@@ -237,8 +237,24 @@ def run(
     if model:
         cfg = cfg.model_copy(deep=True)
         cfg.llm.model = model
-    # normalise the target: accept a bare host, default to https
+    # normalise the target: accept a bare host, a URL, or a local API description
     target = (target or cfg.testing.default_target or "").strip()
+    _spec_items: list = []
+    from owlforge.engine.apispec import looks_like_spec_file
+    if looks_like_spec_file(target):
+        from owlforge.engine.apispec import ingest_spec
+        try:
+            _base, _spec_items, _kind = ingest_spec(target)
+        except Exception as e:
+            console.print(f"[red]could not parse API description {target}: {e}[/]")
+            raise typer.Exit(1) from e
+        if not _base:
+            console.print("[red]the spec declares no server/base URL — run against the "
+                          "live base URL instead.[/]")
+            raise typer.Exit(1)
+        console.print(f"[dim]\\[spec] loaded {_kind}: {len(_spec_items)} endpoint(s); "
+                      f"base {_base}[/]")
+        target = _base
     if target and "://" not in target:
         target = "https://" + target
     if not target:
@@ -375,6 +391,11 @@ def run(
             console.print(f"[dim]\\[recon] surface inventory:\n{_inv}[/]")
     except Exception as e:
         console.print(f"[yellow]recon failed: {e}[/]")
+
+    if _spec_items:
+        from owlforge.engine.recon import persist_new
+        _added = persist_new(aid, _spec_items, cap=400)
+        console.print(f"[dim]\\[spec] seeded {_added} endpoint(s) from the API description[/]")
 
     import re as _re
     _tm = _re.search(r"tech=([^;\n]+)", surface_text or "")
