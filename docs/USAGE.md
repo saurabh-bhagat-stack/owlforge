@@ -91,6 +91,7 @@ interactsh domain you control.
 owlforge run app.example --scope api.example --out-of-scope "*/logout*"  # enforced boundary
 owlforge run app.example --model saluki-27b:latest                       # per-run model override
 owlforge run app.example --network-recon                                 # also nmap (opt-in)
+owlforge run app.example -n --fail-on high                              # CI gate: exit 2 on >= high
 ```
 
 ## Reading results
