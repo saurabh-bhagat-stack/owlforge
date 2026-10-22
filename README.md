@@ -142,6 +142,32 @@ owlforge run app.example --no-pull  # skip the check entirely (offline/CI)
 owlforge sandbox update             # pull only if newer; or `sandbox pull` to force
 ```
 
+### Using Podman (instead of Docker)
+
+owlforge runs the container CLI via a subprocess, so a shell `alias docker=podman` is **not**
+enough. Point owlforge at podman with an environment variable — the syntax differs per shell:
+
+| Shell | This session | Persistent |
+|---|---|---|
+| macOS/Linux (bash/zsh) | `export OWLFORGE_CONTAINER_ENGINE=podman` | add it to `~/.bashrc` / `~/.zshrc` |
+| Windows PowerShell | `$env:OWLFORGE_CONTAINER_ENGINE = "podman"` | `setx OWLFORGE_CONTAINER_ENGINE podman` |
+| Windows CMD | `set OWLFORGE_CONTAINER_ENGINE=podman` | `setx OWLFORGE_CONTAINER_ENGINE podman` |
+| Git Bash / WSL | `export OWLFORGE_CONTAINER_ENGINE=podman` | add it to `~/.bashrc` |
+
+Then make sure Podman is running and go:
+```bash
+podman machine init          # once (macOS/Windows; Podman runs in a small VM)
+podman machine start
+owlforge run http://your-target/     # auto-pulls the image via podman on first run
+```
+Notes for Podman users:
+- `setx` / adding to your rc file only affects **new** shells — reopen the terminal, or set it
+  in the **same** window you run owlforge in.
+- The auto-update check uses `docker buildx imagetools inspect`, which Podman lacks, so it is
+  **skipped** under Podman (no error). Update manually with `podman pull <image>:latest`.
+- Alternatively, install the `podman-docker` shim (or symlink a real `docker` → `podman`) and
+  skip the env var entirely.
+
 ## Configure
 Edit `~/.owlforge/config.toml` and point it at your model:
 ```toml
