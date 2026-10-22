@@ -89,8 +89,8 @@ class FindingDetail(ModalScreen):
 
 class ScanApp(App):
     CSS = """
-    #status { height: 3; background: $panel; color: $text; padding: 0 1; border: round $primary; }
-    #findings { width: 55%; border: round $accent; }
+    #status { height: 4; background: $panel; color: $text; padding: 0 1; border: round $primary; }
+    #findings { width: 62%; border: round $accent; }
     #log { border: round $surface; }
     #detail { padding: 1 2; }
     """
