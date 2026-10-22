@@ -40,27 +40,35 @@ class SandboxSession:
         return f"http://127.0.0.1:{self.novnc_host_port}/vnc.html?autoconnect=1&resize=scale"
 
 
+def container_engine() -> str:
+    """The container CLI owlforge shells out to. Defaults to docker; set
+    OWLFORGE_CONTAINER_ENGINE=podman (or nerdctl) to use another Docker-compatible CLI
+    directly, with no shim/alias needed."""
+    import os
+    return os.environ.get("OWLFORGE_CONTAINER_ENGINE", "docker").strip() or "docker"
+
+
 def _run(args: list[str], timeout: float = 60.0) -> subprocess.CompletedProcess:
     return subprocess.run(args, capture_output=True, text=True, timeout=timeout)
 
 
 def docker_available() -> bool:
     try:
-        return _run(["docker", "info"], timeout=10).returncode == 0
+        return _run([container_engine(), "info"], timeout=10).returncode == 0
     except Exception:
         return False
 
 
 def image_exists(image: str) -> bool:
     try:
-        return _run(["docker", "image", "inspect", image], timeout=15).returncode == 0
+        return _run([container_engine(), "image", "inspect", image], timeout=15).returncode == 0
     except Exception:
         return False
 
 
 def build_image(image: str, context_dir: str | Path, log: Logger = print) -> bool:
     log(f"building {image} from {context_dir} (first build pulls debian-slim; a few minutes)")
-    proc = subprocess.run(["docker", "build", "-t", image, str(context_dir)], text=True)
+    proc = subprocess.run([container_engine(), "build", "-t", image, str(context_dir)], text=True)
     return proc.returncode == 0
 
 
@@ -69,7 +77,7 @@ def local_digest(image: str) -> str | None:
     image is a LOCAL BUILD (no RepoDigests) or absent -> caller treats None as 'cannot
     compare, do not nudge'."""
     try:
-        r = _run(["docker", "image", "inspect", image,
+        r = _run([container_engine(), "image", "inspect", image,
                   "--format", "{{range .RepoDigests}}{{.}} {{end}}"], timeout=15)
         if r.returncode != 0:
             return None
@@ -85,7 +93,7 @@ def remote_digest(image: str) -> str | None:
     """The registry manifest digest for `image` (metadata only, no layer download).
     None if offline / unauthorised / not found."""
     try:
-        r = _run(["docker", "buildx", "imagetools", "inspect", image], timeout=25)
+        r = _run([container_engine(), "buildx", "imagetools", "inspect", image], timeout=25)
         if r.returncode == 0:
             for line in (r.stdout or "").splitlines():
                 ls = line.strip()
@@ -95,7 +103,7 @@ def remote_digest(image: str) -> str | None:
         pass
     try:
         import json as _json
-        r = _run(["docker", "manifest", "inspect", "-v", image], timeout=25)
+        r = _run([container_engine(), "manifest", "inspect", "-v", image], timeout=25)
         if r.returncode == 0:
             data = _json.loads(r.stdout or "null")
             if isinstance(data, dict):
@@ -125,7 +133,7 @@ def update_available(image: str) -> bool | None:
 
 def pull_image(image: str, log: Logger = print) -> bool:
     log(f"pulling {image} ...")
-    proc = subprocess.run(["docker", "pull", image], text=True)
+    proc = subprocess.run([container_engine(), "pull", image], text=True)
     return proc.returncode == 0
 
 
@@ -149,10 +157,10 @@ def start(
     novnc_port = _free_port()
     Path(workspace).mkdir(parents=True, exist_ok=True)
 
-    _run(["docker", "rm", "-f", name], timeout=20)  # clear any stale container of this name
+    _run([container_engine(), "rm", "-f", name], timeout=20)  # clear any stale container of this name
 
     args = [
-        "docker", "run", "-d", "--name", name,
+        container_engine(), "run", "-d", "--name", name,
         "-p", f"127.0.0.1:{host_port}:{AGENTD_CONTAINER_PORT}",
         "-p", f"127.0.0.1:{novnc_port}:{NOVNC_CONTAINER_PORT}",
         "--add-host", "host.docker.internal:host-gateway",
@@ -179,14 +187,14 @@ def start(
                                   novnc_host_port=novnc_port)
         time.sleep(1.0)
 
-    logs = _run(["docker", "logs", "--tail", "40", name], timeout=15).stdout
-    _run(["docker", "rm", "-f", name], timeout=20)
+    logs = _run([container_engine(), "logs", "--tail", "40", name], timeout=15).stdout
+    _run([container_engine(), "rm", "-f", name], timeout=20)
     raise RuntimeError(f"sandbox {name} never became healthy. Container logs:\n{logs[:1500]}")
 
 
 def stop(session: SandboxSession, log: Logger = print) -> None:
     try:
-        _run(["docker", "rm", "-f", session.name], timeout=20)
+        _run([container_engine(), "rm", "-f", session.name], timeout=20)
         log(f"sandbox stopped ({session.name})")
     except Exception as e:
         log(f"sandbox stop warning: {e}")

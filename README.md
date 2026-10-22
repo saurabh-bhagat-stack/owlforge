@@ -107,7 +107,7 @@ and [`docs/recon-spec.md`](docs/recon-spec.md).
 
 ## Requirements
 - **Python 3.11+**
-- **A container engine** — for the sandbox (real tool execution). Anything that provides the `docker` CLI works: Docker Desktop, [colima](https://github.com/abiosoft/colima), Rancher Desktop, or Podman in its Docker-compatible mode.
+- **A container engine** — for the sandbox (real tool execution). Docker Desktop, [colima](https://github.com/abiosoft/colima), or Rancher Desktop work out of the box. **Podman** works too: set `OWLFORGE_CONTAINER_ENGINE=podman` and owlforge calls `podman` directly (a shell `alias docker=podman` is *not* enough — owlforge runs the CLI via subprocess; the env var, the `podman-docker` shim, or a `docker`→`podman` symlink is).
 - **An OpenAI-compatible LLM endpoint** — local (Ollama / Jan / LM Studio / llama.cpp) or hosted.
 
 ## Full setup (from scratch)
