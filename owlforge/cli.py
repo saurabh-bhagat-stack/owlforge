@@ -200,6 +200,9 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
         from owlforge.engine.blindsqli import time_based_sqli_scan
         time_based_sqli_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                              log=lambda m: emit("status", m))
+        from owlforge.engine.sqlmapconfirm import sqlmap_confirm
+        sqlmap_confirm(aid, sandbox_client, session_headers,
+                       log=lambda m: emit("status", m))
         from owlforge.engine.graphqlscan import graphql_scan
         graphql_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                      log=lambda m: emit("status", m), target=target)
