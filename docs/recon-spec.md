@@ -1,5 +1,9 @@
 # Unauthenticated and Authenticated Recon Agents for Penetration Testing
 
+> _Design reference. owlforge is built to this spec; where the shipped code has
+> moved on, [ARCHITECTURE.md](ARCHITECTURE.md) and the source are authoritative._
+
+
 For a pentest automation platform, the **Unauthenticated Recon Agent** and **Authenticated Recon Agent** should operate as separate discovery agents. Their job is not merely endpoint enumeration. They should build a structured **attack-surface model** that downstream agents can consume.
 
 ## 1. Unauthenticated Recon Agent

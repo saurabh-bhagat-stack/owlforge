@@ -12,12 +12,27 @@ owlforge run <target>
 A bare host is fine (`https://` is assumed). It runs **deep by default** — recon +
 interactive SPA mapping, understanding (secrets/JS→API), authentication, deterministic
 pre-probe, specialist agents, out-of-band (blind) testing, access-control and auth-logic
-checks, validation, and a report — all automatic. Each run gets an auto project name
-`<host>-<hash>` so repeat scans of the same target stay separate.
+checks, validation, and a report — all automatic. Each run gets a readable name
+`<host>-<shorthash>` which is also the assessment id and the folder it writes to
+(`~/.owlforge/assessments/<host>-<shorthash>/`), so repeat scans stay separate and are
+easy to find.
 
 ```bash
 owlforge run ginandjuice.shop
 ```
+
+## Watch it live (`-D`)
+
+```bash
+owlforge run app.example -D
+```
+Opens an interactive dashboard: a **narrative activity feed** (what it's testing and
+why, the decisive probes, every confirmed finding; the agent's reasoning shown dim and
+tagged `thinking`), a live **findings** table, a **current-target** card, the discovered
+**surface**, and a **steer** box. Keys: `↑↓` nav · `enter`/click details · `/` filter ·
+`s` sort · `v` severity floor · `L` raw tool log · `Ctrl+Q` quit. Type in the steer box and
+press Enter to drop a note that the next specialist picks up (same channel as `-m`,
+live). Without `-D` you get a scrollable streaming log; add `-n` for headless/CI.
 
 ### Point it at an API description
 
@@ -37,7 +52,7 @@ specialists. Put scope, credentials, focus areas, constraints there:
 
 ```bash
 owlforge run app.example -m "In scope: app.example + api.example. Out of scope: */billing/*.
-Focus on IDOR and SSRF in the checkout flow. Rate-limit to 5 req/s.
+Focus on IDOR and SSRF in the checkout flow.
 Creds: alice/Passw0rd! (user), admin bob/hunter2 (admin)."
 ```
 
@@ -102,7 +117,11 @@ owlforge findings <assessment_id>      # table of findings
 owlforge report  <assessment_id>                 # Markdown (CVSS per finding)
 owlforge report  <assessment_id> --format all    # also report.html + report.sarif.json
 owlforge diff    <assessment_id>                 # NEW / FIXED / PERSISTING vs the previous run
+owlforge resume  <assessment_id>                 # continue an interrupted run (skips finished work)
 ```
+
+`<assessment_id>` is the readable run name (e.g. `ginandjuice.shop-bdcd6b`) — the same string
+as the folder under `~/.owlforge/assessments/`.
 
 Reports and raw evidence are written under `~/.owlforge/assessments/<id>/`. Every validated
 finding carries a CVSS 3.1 score + vector and is tagged with CWE + OWASP; the SARIF export
@@ -110,12 +129,14 @@ drops straight into CI code-scanning.
 
 ## What runs, in order
 
-`recon (unauth → auto-escalate to auth, interactive SPA map, katana, ffuf, nuclei, WAF) →
-understand (secrets / JS→API) → plan (classify + deterministic pre-probe that auto-files
-confirmed findings) → specialists (SQLi/XSS/SSRF/SSTI/RCE/path/XXE/… with a bypass loop) →
-out-of-band (blind SSRF/XXE) → access-control (IDOR/privesc/missing-authn) → auth-logic
-(JWT alg=none + weak secret) → business-logic (candidate probes) → validate (evidence-gated;
-XSS by real browser execution) → collapse + dedupe → exploit-chaining → report.`
+`recon (unauth → auto-escalate to auth; interactive SPA map, katana, ffuf, arjun param
+discovery, nuclei CVE templates, WAF) → understand (secrets / JS→API) → plan (classify +
+deterministic pre-probe that auto-files confirmed findings) → specialists (SQLi/XSS/SSRF/
+SSTI/RCE/path/XXE/… with a bypass loop, confirmed live per phase) → out-of-band (blind
+SSRF/XXE/OS-command, OOB SQLi, Log4Shell/JNDI) → access-control (IDOR/privesc/missing-authn)
+→ CSRF · CORS · auth-logic (JWT) · session · client-side · GraphQL · business-logic →
+sqlmap confirmation of SQLi → validate (evidence-gated; XSS by real browser execution) →
+collapse + dedupe → exploit-chaining → report.`
 
 Everything that files a finding is evidence-gated or deterministically confirmed; proof is
 read-only (e.g. RCE shown with `id`/`hostname`) — owlforge never performs a destructive

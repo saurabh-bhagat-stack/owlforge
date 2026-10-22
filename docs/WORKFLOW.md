@@ -1,8 +1,11 @@
 # owlforge — Engine & Agent Workflow (Plan of Record)
 
-Status date: 2026-10-16. Agreed target architecture and build order for owlforge's
-assessment engine. Supersedes ad-hoc notes; `docs/ARCHITECTURE.md` and
-`docs/recon-spec.md` remain the lower-level references.
+Status date: 2026-10-23. Agreed target architecture and build order for owlforge's
+assessment engine. **Current status: the full pipeline below is built and in public beta**
+(recon → understand → auth → plan/pre-probe → specialists → OAST → the deterministic
+passes → validate → chain → report, plus the interactive dashboard and API-spec targets).
+`docs/ARCHITECTURE.md` describes the system as built; `docs/recon-spec.md` is the recon
+design reference.
 
 ## 0. Design principles
 

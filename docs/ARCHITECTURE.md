@@ -37,13 +37,14 @@ milestone build order live in [`WORKFLOW.md`](WORKFLOW.md); the recon design in
 flowchart LR
   CLI["owlforge run &lt;target&gt;"] --> RECON
   subgraph ENGINE["engine (Python, host)"]
-    RECON["recon<br/>crawl · SPA map · katana · ffuf · nuclei · WAF"]
+    RECON["recon<br/>crawl · SPA map · katana · ffuf · arjun · nuclei · WAF"]
     --> UND["understand<br/>secrets · JS→API"]
     --> AUTH["auth<br/>login-harvest · identities · SSO"]
     --> PLAN["plan<br/>classify + pre-probe (auto-file)"]
     --> HUNT["specialists<br/>SQLi XSS SSRF SSTI RCE XXE … + bypass"]
-    --> OAST["OAST<br/>blind SSRF/XXE"]
+    --> OAST["OAST<br/>blind SSRF/XXE/cmd · OOB SQLi · Log4Shell"]
     --> AC["access-control<br/>IDOR · privesc · missing-authn"]
+    --> DP["deterministic passes<br/>CSRF · CORS · session · GraphQL · Log4Shell/JNDI · sqlmap"]
     --> AL["auth-logic<br/>JWT alg=none · weak secret"]
     --> VAL["validate<br/>evidence-gated · browser-exec XSS"]
     --> REP["collapse · dedupe · chain<br/>report (md / html / sarif, CVSS)"]
@@ -51,7 +52,7 @@ flowchart LR
   ENGINE -->|"HTTP, bearer, 127.0.0.1"| SB
   subgraph SB["owlforge-sandbox (Docker, per run)"]
     AGENTD["owlforge-agentd (FastAPI)<br/>/exec /http /render /map /xss_check<br/>/interact /oast/* /ws_probe /smuggle_probe"]
-    TOOLS["mitmproxy · Playwright Chromium<br/>nmap httpx nuclei ffuf katana wafw00f interactsh cloudflared"]
+    TOOLS["mitmproxy · Playwright Chromium<br/>nmap httpx nuclei ffuf katana wafw00f arjun sqlmap interactsh cloudflared"]
   end
   ENGINE --> STORE[("SQLite<br/>assessments · surface · findings · attempts · events")]
 ```
@@ -109,7 +110,9 @@ A broad secret/PII scanner surfaces exposed credentials, keys, and tokens (kept 
 evidence). The identity/role manager supports multiple labelled sessions (unauth / user A /
 user B / low / admin) via cookie, header, form-login, or TOTP (RFC-6238, dependency-free).
 SSO/MFA is captured by a headed in-sandbox browser exposed over noVNC for a human-in-the-loop
-sign-in, whose storage state is then reused.
+sign-in, whose storage state is then reused — both cookies **and** a bearer token lifted from
+localStorage (modern JWT SPAs). If a credentialed session expires mid-run, owlforge detects it
+and re-logs in automatically with a fresh TOTP code.
 
 ### 3.4 Planning & pre-probe
 The orchestrator classifies every parameter and endpoint into vulnerability classes and
@@ -124,18 +127,34 @@ task needs. When a signal is confirmed but an agent gives up, an enforced bypass
 re-prompts once with concrete evasion techniques, informed by the attempt ledger.
 
 ### 3.6 Validation, dedupe, chaining, report
-Validation re-issues each candidate's structured PoC and promotes it only if the success
-signal reproduces; XSS is confirmed by actual browser execution; access-control by
-differential testing across identities. Findings are deduped; an exploit-chain pass
+Validation runs **incrementally** — each specialist's findings are evidence-checked the moment
+it finishes, so confirmations surface mid-scan. It re-issues each candidate's structured PoC
+and promotes it only if the success signal reproduces; XSS is confirmed by actual browser
+execution; access-control by differential testing across identities; detected SQLi is
+additionally confirmed read-only by sqlmap (DBMS/user). Findings are deduped; an exploit-chain pass
 correlates already-validated components into higher-impact narratives (credentialed
 access → IDOR/privilege escalation; SSRF → cloud instance metadata) — described, never
 further exploited. Reports render to Markdown, HTML, and SARIF 2.1.0 (CWE/OWASP-tagged).
 
-### 3.7 Knowledge / playbooks
-Per-class methodology and tool invocations as **data** (`owlforge/knowledge/playbooks/*.yaml`)
-rendered into the relevant agent's prompt.
+### 3.7 Knowledge packs
+Methodology as **data**: markdown packs under `owlforge/knowledge/<category>/*.md`
+(`vuln/`, `framework/`, `protocol/`, `tech/`, `recon/`, `custom/`) with YAML frontmatter.
+A deterministic, budget-capped loader injects the specialist's class pack plus any
+framework/tech packs matching what recon fingerprinted — so coverage deepens by adding a
+file, not code.
 
-### 3.8 Persistence
+### 3.8 Interactive dashboard (`-D`)
+A Textual terminal UI (optional) renders the live run as a narrative activity feed, a
+findings table, a current-target card, the discovered surface, and a steer box that feeds
+notes to the running orchestrator. The scan runs in a daemon thread; the UI reads findings
+from the store. Default output is a scrollable streaming log (`-n` for headless CI).
+
+### 3.9 API-description targets
+An OpenAPI/Swagger (JSON or YAML) or Postman collection can be the target directly: owlforge
+derives the base URL and seeds every operation onto the blackboard, so the whole API is
+tested without crawling. Specs served by the target are also auto-discovered during recon.
+
+### 3.10 Persistence
 One embedded, transactional **SQLite** store (via SQLModel) for assessments, surface items,
 findings, attempts, events, and reports. Evidence blobs live on disk under the assessment
 workspace; the DB holds metadata and pointers. Schema upgrades are additive.
@@ -144,7 +163,8 @@ workspace; the DB holds metadata and pointers. Schema upgrades are additive.
 
 ### 4.1 Image (`owlforge-sandbox`)
 A slim multi-stage build on a Debian base with pinned tool versions: the recon/test tool
-suite (nmap, httpx, nuclei, ffuf, katana, wafw00f), `mitmproxy`, Playwright Chromium, a
+suite (nmap, httpx, nuclei, ffuf, katana, wafw00f, arjun, sqlmap, interactsh), `mitmproxy`,
+Playwright Chromium, a
 noVNC stack for interactive sign-in, and `owlforge-agentd`. The entry point launches the
 capture proxy and the daemon and stays up (no `set -e`). Agentd code is copied last so
 editing it rebuilds in seconds.
@@ -187,17 +207,23 @@ out-of-scope traffic is blocked rather than merely discouraged.
 ## 5. CLI
 
 ```
-owlforge init
-owlforge sandbox build | status
-owlforge run app.example [-m "scope / creds / focus / constraints"] \
-             [--identities roles.yaml] [--scope h] [--out-of-scope g] \
-             [--model id] [--network-recon]
+owlforge init                      # write config + init the local store
+owlforge doctor                    # preflight: engine, image, config, model (with fixes)
+owlforge sandbox build|status|pull|update
+owlforge run <target> [-m "scope / creds / focus"] [--identities roles.yaml] \
+             [--scope h] [--out-of-scope g] [--model id] [--network-recon] \
+             [-D] [-n] [--fail-on sev] [--pull | --no-pull]
+owlforge resume <id>               # continue an interrupted run
 owlforge assessments list | show <id>
 owlforge findings <id>
 owlforge report  <id> [--format md|html|sarif|all] [--rebuild]
+owlforge diff    <id>              # NEW / FIXED / PERSISTING vs the previous run
 ```
-Config lives at `~/.owlforge/config.toml` (LLM base URL / model, sandbox image, budgets).
-`run` streams the live event feed to the terminal.
+The target may be a URL/host or a local OpenAPI/Swagger/Postman file. Config lives at
+`~/.owlforge/config.toml` (LLM base URL / model, sandbox image). The container engine is
+auto-detected (docker/podman/nerdctl); `OWLFORGE_CONTAINER_ENGINE` forces one. `run` streams
+a live log, or an interactive dashboard with `-D`; `-n` is headless with CI exit codes
+(0 clean / 2 findings at/above `--fail-on` / 1 error).
 
 ## 6. Repository layout
 
@@ -210,7 +236,8 @@ owlforge/
     engine/         # recon, orchestrator, agents, pre-probe, validate, chains, ...
     tools/          # tool registry (sandbox + engine-local)
     sandbox/        # RPC client, container lifecycle
-    knowledge/      # playbooks (YAML) + loader
+    knowledge/      # methodology packs (markdown) + loader; engine/tui.py (dashboard),
+                    #   engine/apispec.py (OpenAPI/Postman), engine/corsscan.py, etc.
     store/          # SQLite models
     report/         # markdown / HTML / SARIF rendering
     bench/          # model-compatibility benchmarking (dev)

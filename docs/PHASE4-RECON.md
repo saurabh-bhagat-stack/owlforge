@@ -1,5 +1,9 @@
 # Phase 4 — Multi-agent: the Recon agent (+ auth)
 
+> _Design reference. owlforge is built to this spec; where the shipped code has
+> moved on, [ARCHITECTURE.md](ARCHITECTURE.md) and the source are authoritative._
+
+
 ## Why
 Benchmarks showed local models *confirm* vulns reliably when guided but *discover*
 them unreliably — they under-enumerate the attack surface. The fix is not more prompt
