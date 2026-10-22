@@ -352,9 +352,13 @@ def run(
                       "Desktop) and re-run — owlforge runs its tools in a sandbox container.[/]")
         raise typer.Exit(1)
     if not manager.image_exists(cfg.sandbox.image):
-        console.print(f"[red]Sandbox image not built ({cfg.sandbox.image}). Run "
-                      "`owlforge sandbox build` first.[/]")
-        raise typer.Exit(1)
+        console.print(rf"[yellow]\[sandbox] image not present locally "
+                      f"({cfg.sandbox.image}) — pulling it (first run only)...[/]")
+        if not manager.pull_image(cfg.sandbox.image, log=sblog):
+            console.print("[red]could not pull the sandbox image. Build it from a source "
+                          "checkout with `owlforge sandbox build`, or check your network "
+                          "and the image name in ~/.owlforge/config.toml.[/]")
+            raise typer.Exit(1)
     _maybe_update_image(cfg.sandbox.image, pull=pull, no_pull=no_pull,
                         interactive=console.is_terminal and not non_interactive)
     try:

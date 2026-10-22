@@ -110,10 +110,11 @@ pip install -e .                 # add ".[dev]" for tests/lint
 # 3. initialize config + local DB  (writes ~/.owlforge/config.toml)
 owlforge init
 
-# 4. start Docker, then build the sandbox image (first build pulls the base + tools)
+# 4. start Docker — the sandbox image is pulled automatically on first run
 colima start                     # macOS; or ensure Docker Desktop/daemon is running
-owlforge sandbox build
-owlforge sandbox status          # confirm: docker available + image built
+owlforge sandbox pull            # optional: pre-fetch the published image now
+#                                  (or build from source instead: owlforge sandbox build)
+owlforge sandbox status          # confirm: docker available + image present
 ```
 
 ### Keeping the sandbox current
