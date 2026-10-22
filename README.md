@@ -22,6 +22,18 @@ Original work — its own architecture and engine, built from the ground up.
 
 > **Usage guide:** worked examples (authenticated IDOR, OAST config, reading results) are in [docs/USAGE.md](docs/USAGE.md).
 
+## Demo
+
+A live run in the interactive dashboard (`-D`) — scrollable findings table, click a row for the full finding, live event log:
+
+<p align="center">
+  <img src="docs/assets/owlforge-dashboard.svg" alt="owlforge dashboard" width="820">
+</p>
+
+> _Illustrative layout; findings shown are representative of a run against a deliberately-vulnerable test app._
+
+Prefer plain output? Omit `-D` for a scrollable streaming log (and `-n` for headless CI).
+
 ## Why local-first
 owlforge is built to be driven by a **local** model (any OpenAI-compatible endpoint —
 Ollama / Jan / LM Studio / llama.cpp). Designing for a modest local model forces a robust,
