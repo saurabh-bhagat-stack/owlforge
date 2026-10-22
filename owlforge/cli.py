@@ -271,7 +271,12 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
     try:
         from owlforge.engine.appmodel import build_app_model
         from owlforge.engine.orchestrator import read_blackboard
-        from owlforge.engine.scenarios import mass_assignment_scan, run_business_logic_specialist
+        from owlforge.engine.scenarios import (
+            mass_assignment_scan,
+            register_privilege_scan,
+            run_business_logic_specialist,
+            unauth_action_scan,
+        )
         from owlforge.store.models import SurfaceItem
         with session() as _ms:
             _seeded_urls = [r.url for r in _ms.exec(select(SurfaceItem).where(
@@ -310,6 +315,10 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
                            log=lambda m: emit("status", m))
         mass_assignment_scan(aid, _model, sandbox_client, session_headers,
                              log=lambda m: emit("status", m))
+        register_privilege_scan(aid, read_blackboard(aid), sandbox_client, target,
+                                log=lambda m: emit("status", m))
+        unauth_action_scan(aid, _model, sandbox_client, session_headers,
+                           log=lambda m: emit("status", m))
         from owlforge.engine.authlogic import jwt_scan
         jwt_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                  log=lambda m: emit("status", m))
