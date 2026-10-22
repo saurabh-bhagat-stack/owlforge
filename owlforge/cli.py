@@ -162,6 +162,25 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
         done_seed=done_seed, checkpoint=checkpoint, validate_cb=_validate_cb,
         detected_tech=detected_tech, steer_fn=steer_fn,
     ))
+    # mid-scan re-auth: if a credentialed session expired during the long hunt, re-login
+    # (fresh TOTP) so the deterministic passes + validation still run authenticated.
+    if login_specs and sandbox_client is not None and session_headers:
+        from owlforge.engine.identities import reauth_login, session_alive
+        def _reqfn(m, u, headers=None, params=None, body=None):
+            try:
+                return sandbox_client.http_request(m, u, headers=headers, params=params, body=body)
+            except Exception:
+                return {}
+        if not session_alive(_reqfn, target, session_headers):
+            emit("status", "[reauth] session expired mid-scan - re-logging in")
+            fresh = reauth_login(login_specs[0], _reqfn,
+                                 log=lambda m: emit("status", f"[reauth] {m}"))
+            if fresh:
+                session_headers.clear()
+                session_headers.update(fresh)
+                emit("status", "[reauth] session refreshed")
+            else:
+                emit("log", "[reauth] could not refresh the session automatically")
     try:
         from owlforge.engine.orchestrator import read_blackboard
         from owlforge.engine.stored import stored_scan
@@ -411,7 +430,9 @@ def run(
             identity_set = [{"label": i.label, "role": i.role, "headers": i.session_headers}
                             for i in _idents if i.session_headers or i.role == "anonymous"]
             login_specs = [{"url": (i.auth or {}).get("url"), "data": (i.auth or {}).get("data", ""),
-                            "success": (i.auth or {}).get("success", "")}
+                            "success": (i.auth or {}).get("success", ""),
+                            "totp_secret": (i.auth or {}).get("totp_secret"),
+                            "totp_field": (i.auth or {}).get("totp_field")}
                            for i in _idents if (i.auth or {}).get("type") == "login"
                            and (i.auth or {}).get("url")]
         except Exception as e:

@@ -92,6 +92,43 @@ def establish_identity(identity: Identity, request_fn: RequestFn,
     return headers
 
 
+def session_alive(request_fn: RequestFn, probe_url: str, headers: dict) -> bool:
+    """Is an authenticated session still valid? GET an authed URL with its headers;
+    dead on 401/403, a redirect to a login page, or a 200 that renders a login form.
+    Unknown/errors -> treated as alive (never re-auth needlessly)."""
+    try:
+        r = request_fn("GET", probe_url, headers=headers or {}) or {}
+    except Exception:
+        return True
+    status = int(r.get("status") or 0)
+    if status in (401, 403):
+        return False
+    if 300 <= status < 400:
+        loc = str((r.get("headers") or {}).get("location")
+                  or (r.get("headers") or {}).get("Location") or "").lower()
+        return "login" not in loc and "signin" not in loc
+    if status == 200:
+        try:
+            from owlforge.engine.validate import _looks_like_login
+            return not _looks_like_login(r.get("body") or "")
+        except Exception:
+            return True
+    return True
+
+
+def reauth_login(spec: dict, request_fn: RequestFn,
+                 log: Callable[[str], None] = lambda m: None) -> dict:
+    """Re-run a form login from a saved spec (url/data/success + optional totp_secret),
+    regenerating a fresh TOTP code. Returns fresh session headers ({} on failure)."""
+    from owlforge.engine.auth import AuthContext, establish_session
+    params = dict(parse_qsl(spec.get("data") or ""))
+    if spec.get("totp_secret"):
+        params[spec.get("totp_field") or "otp"] = totp_now(spec["totp_secret"])
+    ctx = AuthContext(mode="login", login_url=spec.get("url"), login_params=params,
+                      login_success=spec.get("success"))
+    return establish_session(ctx, request_fn, log=log) or {}
+
+
 def establish_all(identities: list[Identity], request_fn: RequestFn,
                   log: Callable[[str], None] = lambda m: None) -> list[Identity]:
     for ident in identities:
