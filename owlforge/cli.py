@@ -39,6 +39,21 @@ app.add_typer(sandbox_app, name="sandbox")
 
 console = Console()
 
+_SEV_RANKS = {"info": 0, "low": 1, "medium": 2, "high": 3, "critical": 4}
+
+
+def _meets_fail_threshold(validated_severities, fail_on) -> bool | None:
+    """True if any validated severity is at/above fail_on; None if fail_on is
+    unset or unknown (caller treats None as 'do not gate')."""
+    if not fail_on:
+        return None
+    threshold = _SEV_RANKS.get(str(fail_on).strip().lower())
+    if threshold is None:
+        return None
+    worst = max((_SEV_RANKS.get((x or "").lower(), 0) for x in validated_severities),
+                default=-1)
+    return worst >= threshold
+
 
 _WORDMARK = r"""
  ██████╗ ██╗    ██╗██╗     ███████╗ ██████╗ ██████╗  ██████╗ ███████╗
@@ -225,6 +240,14 @@ def run(
         False, "--dashboard", "-D",
         help="Live full-screen dashboard (snapshot view). Default: the scrollable "
              "streaming log, which you can scroll in your terminal."),
+    fail_on: str = typer.Option(
+        None, "--fail-on",
+        help="CI gate: exit non-zero (2) if any VALIDATED finding is at or above this "
+             "severity (critical|high|medium|low|info)."),
+    non_interactive: bool = typer.Option(
+        False, "--non-interactive", "-n",
+        help="Headless: plain output, no dashboard, CI-friendly exit codes "
+             "(0 clean / 2 findings at/above --fail-on / 1 error)."),
 ) -> None:
     """Run a deep assessment against TARGET. Thorough by default — recon, interactive SPA
     mapping, pre-probe, specialists, validation, and reporting all run automatically."""
@@ -401,7 +424,7 @@ def run(
     _tm = _re.search(r"tech=([^;\n]+)", surface_text or "")
     detected_tech = [t.strip() for t in _tm.group(1).split(",")] if _tm else []
     detected_tech = [t for t in detected_tech if t and t != "?"]
-    _use_tui = dashboard_ui and console.is_terminal
+    _use_tui = dashboard_ui and console.is_terminal and not non_interactive
 
     def _checkpoint(keys):
         with session() as _s:
@@ -465,6 +488,17 @@ def run(
             border_style="green" if status == "completed" else "red",
         )
     )
+
+    # CI exit codes: 1 = error, 2 = a validated finding at/above --fail-on, else 0
+    if status == "failed":
+        raise typer.Exit(1)
+    with session() as s:
+        _vsev = [f.severity for f in s.exec(select(Finding).where(
+            Finding.assessment_id == aid, Finding.status == "validated")).all()]
+    if _meets_fail_threshold(_vsev, fail_on):
+        console.print(f"[red]--fail-on {fail_on}: a validated finding meets the threshold "
+                      "-> exit 2[/]")
+        raise typer.Exit(2)
 
 
 @app.command()
