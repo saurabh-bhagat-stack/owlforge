@@ -7,8 +7,8 @@ the page must be genuinely session-gated (anonymous is denied) and the logout en
 respond; because a GET to /logout might not be the app's real logout mechanism, this is
 filed as a CANDIDATE for manual verification rather than auto-validated.
 
-Session *fixation* needs to observe the login transition's cookies (pre vs post auth) and
-is not done here — it requires hooks into the auth flow (tracked as a TODO).
+Session *fixation* (pre- vs post-auth cookie comparison) is handled separately in
+engine/sessionfix.py, which observes the confirmed-login transition.
 """
 
 from __future__ import annotations

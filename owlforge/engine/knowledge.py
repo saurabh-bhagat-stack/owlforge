@@ -35,6 +35,8 @@ _CLASS_PACK = {
     "open_redirect": "vuln/open_redirect.md",
     "xxe": "vuln/xxe.md",
     "nosql": "vuln/nosql.md",
+    "file_upload": "vuln/file_upload.md",
+    "deserialization": "vuln/deserialization.md",
     "graphql": "protocol/graphql.md",
 }
 
