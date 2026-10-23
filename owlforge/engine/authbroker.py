@@ -114,3 +114,38 @@ def capture_sso_session(
     n = len((state or {}).get("cookies", []) or [])
     log(f"  captured {n} cookie(s) from the authenticated session")
     return state
+
+
+def load_persisted_session(path: str | None) -> dict:
+    """Load a previously-captured storage_state from disk ({} if missing/invalid)."""
+    if not path:
+        return {}
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def reuse_or_capture_sso(sandbox_client, novnc_url, login_url, *, target, persist_path=None,
+                         is_alive: Callable[[dict], bool] = lambda h: False,
+                         prompt_fn: Callable[[str], str] = input,
+                         log: Callable[[str], None] = print, capture_fn=None) -> dict:
+    """Reuse a saved SSO session when it is still valid; otherwise capture a fresh one
+    interactively. Returns the storage_state. Reuse lets repeat runs (and unattended runs
+    within the session's lifetime) skip the manual login."""
+    capture_fn = capture_fn or capture_sso_session
+    saved = load_persisted_session(persist_path)
+    if saved:
+        headers = storage_state_to_headers(saved, target)
+        try:
+            alive = bool(headers) and bool(is_alive(headers))
+        except Exception:
+            alive = False
+        if alive:
+            log(f"  reusing a saved SSO session ({persist_path})")
+            return saved
+        log("  saved SSO session is stale — capturing a fresh one")
+    return capture_fn(sandbox_client, novnc_url, login_url, persist_path=persist_path,
+                      prompt_fn=prompt_fn, log=log)

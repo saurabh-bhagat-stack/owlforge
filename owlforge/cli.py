@@ -551,14 +551,31 @@ def run(
                                     log=lambda m: console.print(rf"[dim]\[identities] {m}[/]"))
             _sso_idents = [i for i in _idents if i.needs_sso]
             if _sso_idents and sandbox_session is not None:
-                from owlforge.engine.authbroker import capture_sso_session, storage_state_to_headers
+                import re as _re
+                from urllib.parse import urlsplit as _urlsplit
+
+                from owlforge.engine.authbroker import reuse_or_capture_sso, storage_state_to_headers
+                from owlforge.engine.identities import session_alive
+                _sso_dir = assessments_dir() / ".sso"
+                _sso_dir.mkdir(parents=True, exist_ok=True)
+                _host = _re.sub(r"[^A-Za-z0-9.-]", "_", _urlsplit(target).netloc or target)
+
+                def _sso_reqfn(m, u, headers=None, params=None, body=None):
+                    try:
+                        return sandbox_client.http_request(m, u, headers=headers, params=params,
+                                                           body=body)
+                    except Exception:
+                        return {}
+
                 for ident in _sso_idents:
                     _login_url = ident.auth.get("url") or target
-                    ppath = str(assessments_dir() / aid / f"sso_{ident.label}.json")
-                    state = capture_sso_session(
+                    # stable per-target path so a valid session is reused across runs
+                    ppath = str(_sso_dir / f"{_host}_{ident.label}.json")
+                    state = reuse_or_capture_sso(
                         sandbox_client, sandbox_session.novnc_url, _login_url,
-                        persist_path=ppath, prompt_fn=console.input,
-                        log=lambda m: console.print(m))
+                        target=target, persist_path=ppath,
+                        is_alive=lambda h: session_alive(_sso_reqfn, target, h),
+                        prompt_fn=console.input, log=lambda m: console.print(m))
                     ident.session_headers = storage_state_to_headers(state, target)
                     ident.established = bool(ident.session_headers)
             _prim = primary_identity(_idents)
