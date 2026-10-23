@@ -91,6 +91,7 @@ def openapi_to_items(spec: dict, base_url: str) -> list[dict]:
     if not isinstance(paths, dict):
         return []
     origin = base_url.rstrip("/")
+    global_auth = bool(spec.get("security"))        # a non-empty top-level security requirement
     out = []
     for path, methods in paths.items():
         if not isinstance(methods, dict):
@@ -110,11 +111,15 @@ def openapi_to_items(spec: dict, base_url: str) -> list[dict]:
                     for media in (rb.get("content") or {}).values():
                         if isinstance(media, dict):
                             params.extend(_schema_props(media.get("schema") or {}, spec))
+            # an operation's own `security` overrides the global default; `security: []`
+            # explicitly makes it public, a non-empty list requires auth
+            requires_auth = bool(op.get("security")) if isinstance(op, dict) and "security" in op \
+                else global_auth
             # truncate at the first path-template segment (consistent with recon discovery)
             clean = origin + ("/" + str(path).lstrip("/")).split("{")[0].rstrip("/")
             out.append({"url": clean or origin + "/" + str(path).lstrip("/"),
                         "method": str(method).upper(), "params": sorted(set(params)),
-                        "source": "api-spec"})
+                        "source": "api-spec", "requires_auth": requires_auth})
     return out
 
 
@@ -136,6 +141,7 @@ def _subst(raw: str, vars_: dict) -> str:
 def postman_to_items(coll: dict) -> tuple[str, list[dict]]:
     vars_ = _postman_vars(coll)
     base = ""
+    coll_auth = bool(coll.get("auth"))
     items: list[dict] = []
 
     def _raw_url(url) -> tuple[str, list[str]]:
@@ -192,7 +198,8 @@ def postman_to_items(coll: dict) -> tuple[str, list[dict]]:
             if "://" not in raw:
                 continue
             items.append({"url": raw, "method": method,
-                          "params": sorted(set(params)), "source": "api-spec"})
+                          "params": sorted(set(params)), "source": "api-spec",
+                          "requires_auth": bool(req.get("auth")) or coll_auth})
 
     walk(coll)
     return base, items

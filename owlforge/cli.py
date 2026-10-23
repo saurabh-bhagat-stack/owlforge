@@ -345,6 +345,9 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
         from owlforge.engine.apiabuse import api_fuzz_scan
         api_fuzz_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                       log=lambda m: emit("status", m))
+        from owlforge.engine.apiabuse import method_exposure_scan
+        method_exposure_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                             log=lambda m: emit("status", m))
         from owlforge.engine.bizlogic import bizlogic_scan
         bizlogic_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                       log=lambda m: emit("status", m))
@@ -640,6 +643,9 @@ def run(
         from owlforge.engine.recon import persist_new
         _added = persist_new(aid, _spec_items, cap=400)
         console.print(f"[dim]\\[spec] seeded {_added} endpoint(s) from the API description[/]")
+        from owlforge.engine.apiabuse import api_auth_scan
+        api_auth_scan(aid, _spec_items, sandbox_client,
+                      log=lambda m: console.print(rf"[dim]\[api-auth] {m}[/]"))
 
     # stateful seeding (deep-by-default): if the app lets you register, make a throwaway
     # account (a 2nd identity); if it lets you create/upload, create a marker object and
