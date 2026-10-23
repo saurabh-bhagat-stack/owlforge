@@ -650,6 +650,9 @@ def run(
         _gseeded = graphql_seed_objects(_inv, sandbox_client, session_headers, target, log=_slog)
         if _gseeded:
             console.print(f"[dim]\\[seed] created {len(_gseeded)} GraphQL object(s)[/]")
+            from owlforge.engine.graphqlscan import graphql_idor_scan
+            graphql_idor_scan(aid, _gseeded, sandbox_client, session_headers,
+                              identity_set, log=_slog)
     except Exception as e:
         console.print(f"[yellow]seed step skipped: {type(e).__name__}: {e}[/]")
 

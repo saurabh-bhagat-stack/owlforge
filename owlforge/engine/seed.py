@@ -370,6 +370,43 @@ def _gql_literal(scalar: str, marker: str) -> str:
     return json.dumps(f"owlforge test {marker}" if scalar != "ID" else marker)
 
 
+_INTROSPECT_INPUT_HEAD = '{__type(name:"'
+_INTROSPECT_INPUT_TAIL = '"){inputFields{name type{kind name ofType{kind name ofType{kind name}}}}}}'
+
+
+def _gql_input_literal(sandbox, url, type_name, headers, marker, depth=0) -> str:
+    """Build a GraphQL input-object literal for an INPUT_OBJECT arg by introspecting its
+    fields and filling scalars (recurses one level into nested input objects)."""
+    if depth > 1 or not type_name:
+        return ""
+    q = _INTROSPECT_INPUT_HEAD + type_name + _INTROSPECT_INPUT_TAIL
+    r = _gql_post(sandbox, url, q, headers)
+    try:
+        ifs = json.loads(r.get("body", "") or "").get("data", {}).get("__type", {}).get("inputFields") or []
+    except Exception:
+        return ""
+    parts = []
+    for fld in ifs:
+        base = _gql_base_type(fld.get("type") or {})
+        if base.get("name") in _GQL_SCALARS:
+            parts.append(f'{fld["name"]}:{_gql_literal(base["name"], marker)}')
+        elif base.get("kind") == "INPUT_OBJECT" and base.get("name"):
+            sub = _gql_input_literal(sandbox, url, base["name"], headers, marker, depth + 1)
+            if sub:
+                parts.append(f'{fld["name"]}:{sub}')
+    return "{" + ", ".join(parts) + "}" if parts else ""
+
+
+def _gql_read_field(mutation_name: str) -> str:
+    """Convention: createPost -> post, addUser -> user (a plausible query field to read back)."""
+    n = mutation_name or ""
+    for pre in ("create", "add", "new", "insert", "signup", "register", "save", "submit", "make"):
+        if n.lower().startswith(pre):
+            n = n[len(pre):]
+            break
+    return (n[0].lower() + n[1:]) if n else mutation_name
+
+
 def graphql_seed_objects(inventory, sandbox, session_headers, target,
                          log: Callable[[str], None] = lambda m: None, cap: int = 3) -> list[dict]:
     """If a GraphQL endpoint exposes introspection, create an object via a create-ish mutation
@@ -397,10 +434,16 @@ def graphql_seed_objects(inventory, sandbox, session_headers, target,
             arglits, ok = [], True
             for a in (f.get("args") or []):
                 base = _gql_base_type(a.get("type") or {})
-                scalar = base.get("name")
                 required = (a.get("type") or {}).get("kind") == "NON_NULL"
-                if scalar in _GQL_SCALARS:
-                    arglits.append(f'{a["name"]}:{_gql_literal(scalar, marker)}')
+                if base.get("name") in _GQL_SCALARS:
+                    arglits.append(f'{a["name"]}:{_gql_literal(base["name"], marker)}')
+                elif base.get("kind") == "INPUT_OBJECT" and base.get("name"):
+                    lit = _gql_input_literal(sandbox, url, base["name"], session_headers, marker)
+                    if lit:
+                        arglits.append(f'{a["name"]}:{lit}')
+                    elif required:
+                        ok = False
+                        break
                 elif required:
                     ok = False
                     break
@@ -418,7 +461,8 @@ def graphql_seed_objects(inventory, sandbox, session_headers, target,
                 if node is not None:
                     rid = node.get("id") if isinstance(node, dict) else None
                     out.append({"url": url, "method": "POST", "params": [], "source": "seeded-graphql",
-                                "marker": marker, "graphql": f"mutation {name}", "object_id": rid})
+                                "marker": marker, "graphql": f"mutation {name}", "object_id": rid,
+                                "endpoint": url, "read_field": _gql_read_field(name)})
                     log(f"seed: created a GraphQL object via {name}() (id={rid})")
                     break
             if len(out) >= cap:

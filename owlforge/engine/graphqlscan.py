@@ -91,3 +91,71 @@ def graphql_scan(assessment_id, inventory, sandbox, session_headers,
     if filed:
         log(f"graphql: {filed} GraphQL schema-exposure finding(s)")
     return filed
+
+
+def _file_gql_idor(assessment_id, url, field, actor):
+    from owlforge.store.db import session
+    from owlforge.store.models import Finding
+    with session() as s:
+        s.add(Finding(
+            id=f"find_{_secrets.token_hex(5)}", assessment_id=assessment_id,
+            title="GraphQL broken object-level authorization (BOLA/IDOR): object readable by another actor",
+            severity="high", status="candidate", confidence="medium",
+            endpoint=url, method="POST",
+            technical_analysis=(
+                f"owlforge created a GraphQL object and then read it back by id as '{actor}', a "
+                f"different identity (or anonymous), via the query field '{field}(id: …)'. The "
+                "object's data was returned to that non-owner. If the object is meant to be private "
+                "to its creator, object-level authorization is missing in the resolver."),
+            proof_of_concept=f"{field}(id: <owlforge-created id>) returned data for '{actor}'",
+            impact="Users can read other users' objects by guessing/enumerating ids (BOLA) — a "
+                   "common and high-impact GraphQL authorization flaw.",
+            remediation="Enforce per-object authorization inside each resolver (check the caller "
+                        "owns or may access the requested node); do not rely on obscurity of ids.",
+            validation_note="cross-actor GraphQL read of an owlforge-created object — verify it should be private"))
+        s.commit()
+
+
+def graphql_idor_scan(assessment_id, seeded_gql, sandbox, owner_headers, identities,
+                      log: Callable[[str], None] = lambda m: None) -> int:
+    """For objects owlforge created via GraphQL mutations, read each one back by id as a
+    different identity (and anonymously). If a non-owner gets the object, file a BOLA/IDOR
+    candidate. Safe: only owlforge's own seeded objects are touched."""
+    if sandbox is None or not seeded_gql:
+        return 0
+    filed = 0
+    for item in seeded_gql:
+        if item.get("source") != "seeded-graphql":
+            continue
+        oid, field = item.get("object_id"), item.get("read_field")
+        url = item.get("endpoint") or item.get("url")
+        if not (oid and field and url):
+            continue
+        idlit = str(oid) if str(oid).isdigit() else json.dumps(str(oid))
+        q = "{" + field + "(id:" + idlit + "){id}}"
+        owner = _post(sandbox, url, q, owner_headers)
+        try:
+            od = (json.loads(owner.get("body", "") or "").get("data") or {}).get(field)
+        except Exception:
+            od = None
+        if od is None:
+            continue                       # owner can't read it this way — no baseline
+        actors = [("anonymous", {})]
+        for i in (identities or []):
+            h = i.get("headers") or {}
+            if h and h != owner_headers:
+                actors.append((i.get("label", "peer"), h))
+        for label, hdr in actors:
+            r = _post(sandbox, url, q, hdr)
+            try:
+                d = (json.loads(r.get("body", "") or "").get("data") or {}).get(field)
+            except Exception:
+                d = None
+            if d is not None:
+                _file_gql_idor(assessment_id, url, field, label)
+                log(f"graphql-idor: '{label}' read another actor's {field} by id via {url}")
+                filed += 1
+                break
+    if filed:
+        log(f"graphql-idor: {filed} cross-actor read(s) on GraphQL objects")
+    return filed

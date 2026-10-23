@@ -229,3 +229,32 @@ def test_graphql_seed_quiet_without_introspection():
 def test_graphql_seed_requires_session():
     from owlforge.engine.seed import graphql_seed_objects
     assert graphql_seed_objects(_GQL_INV, _GqlApp(), {}, "https://t") == []
+
+
+class _GqlInputApp:
+    """GraphQL createPost(input: PostInput!) where PostInput has scalar fields."""
+
+    def http_request(self, method, url, *, headers=None, params=None, body=None,
+                     follow_redirects=True, timeout_ms=30000):
+        import json as _j
+        q = (_j.loads(body or "{}").get("query", "") if body else "")
+        if "__schema" in q:
+            return {"status": 200, "headers": {}, "body": _j.dumps({"data": {"__schema": {
+                "mutationType": {"fields": [{"name": "createPost", "args": [
+                    {"name": "input", "type": {"kind": "NON_NULL", "name": None, "ofType":
+                     {"kind": "INPUT_OBJECT", "name": "PostInput", "ofType": None}}}]}]}}}})}
+        if "__type" in q and "PostInput" in q:
+            return {"status": 200, "headers": {}, "body": _j.dumps({"data": {"__type": {
+                "inputFields": [
+                    {"name": "title", "type": {"kind": "SCALAR", "name": "String", "ofType": None}},
+                    {"name": "role", "type": {"kind": "SCALAR", "name": "String", "ofType": None}}]}}})}
+        if "createPost" in q:
+            return {"status": 200, "headers": {}, "body": '{"data":{"createPost":{"id":"9"}}}'}
+        return {"status": 400, "headers": {}, "body": "{}"}
+
+
+def test_graphql_seed_input_object_mutation():
+    from owlforge.engine.seed import graphql_seed_objects
+    out = graphql_seed_objects(_GQL_INV, _GqlInputApp(), {"Cookie": "s=1"}, "https://t")
+    assert len(out) == 1
+    assert out[0]["object_id"] == "9" and out[0]["read_field"] == "post"
