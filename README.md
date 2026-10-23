@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-229%20passing-2dd4bf">
+  <img alt="tests" src="https://img.shields.io/badge/tests-336%20passing-2dd4bf">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-22d3ee">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-5b7891">
   <img alt="status" src="https://img.shields.io/badge/status-beta-f59e0b">
@@ -248,17 +248,22 @@ owlforge tells you to start it rather than silently running a weaker host-only s
 
 ## Roadmap
 
-Beta — these are known gaps being worked on:
+Beta — the known gaps still being worked on:
 
-- **User roles & richer multi-identity** — deeper role modelling beyond the current
-  owner/other/anon differential.
-- **SSO / IdP flows** — hardening automated sign-in across more providers (today:
-  form login, login-page harvest, headed noVNC for SSO/MFA, RFC-6238 TOTP).
-- **Deeper API scanning** — beyond OpenAPI/Postman ingestion: schema-aware auth,
-  body/variable fuzzing, and API-specific abuse cases.
 - **White-box mode** — optional source-aware pass (secret scan + SAST) to prioritise
   dynamic testing; also unlocks PR diff-scope.
-- Logout/session-invalidation confirmation; race conditions; broader CORS checks.
+- **Deeper API abuse** — beyond spec ingestion and JSON mass-assignment (both in place):
+  schema-aware auth, body/variable fuzzing, and more API-specific abuse cases.
+- **Richer role modelling** — a per-role capability matrix and role hierarchy on top of
+  the current owner/peer/anon differential, privileged-role detection, and auto-provisioned
+  second account.
+- **SSO breadth** — automated sign-in across more IdPs (today: form login, login-page
+  harvest, headed noVNC capture with session reuse, and RFC-6238 TOTP).
+
+Recently shipped (previously on this list): the business-logic / scenario engine (mass
+assignment, workflow step-bypass, cross-actor authz, unauth-action checks), the
+race-condition probe, GraphQL cross-session IDOR, logout/session-invalidation confirmation,
+and broader CORS checks.
 
 ## Development
 ```bash
