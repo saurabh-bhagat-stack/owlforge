@@ -458,3 +458,39 @@ def test_mass_assignment_json_api_secure_quiet(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     from owlforge.engine.scenarios import mass_assignment_scan
     assert mass_assignment_scan("a", _model_json_api(), _JsonApiApp(bind=False), SESS) == 0
+
+
+# ---- body-driven workflow state bypass --------------------------------------------------
+class _WFBodyApp:
+    """An order whose state is set via a body field (status=approved), no /verb endpoint."""
+
+    def __init__(self, allow):
+        self.allow = allow
+        self.status = "draft"
+
+    def http_request(self, method, url, *, headers=None, params=None, body=None,
+                     follow_redirects=True, timeout_ms=30000):
+        if url.endswith("/orders/7") and method == "GET":
+            return {"status": 200, "headers": {}, "body": f"<div>status: {self.status}</div>"}
+        if url.endswith("/orders/7") and method == "POST":
+            if self.allow and "status=approved" in (body or ""):
+                self.status = "approved"
+                return {"status": 200, "headers": {}, "body": "ok"}
+            return {"status": 200, "headers": {}, "body": "ok"}   # accepts but ignores (secure)
+        return {"status": 404, "headers": {}, "body": ""}
+
+
+def test_workflow_bypass_body_driven_candidate(tmp_path, monkeypatch):
+    db = _db(tmp_path, monkeypatch)
+    _seed_surface(db, url="https://t/orders/7")
+    from owlforge.engine.scenarios import workflow_bypass_scan
+    assert workflow_bypass_scan("a", _model_transition(), _WFBodyApp(allow=True), SESS) >= 1
+    assert any("workflow step bypass" in x.title.lower() for x in _findings(db))
+
+
+def test_workflow_bypass_body_driven_secure_quiet(tmp_path, monkeypatch):
+    db = _db(tmp_path, monkeypatch)
+    _seed_surface(db, url="https://t/orders/7")
+    from owlforge.engine.scenarios import workflow_bypass_scan
+    assert workflow_bypass_scan("a", _model_transition(), _WFBodyApp(allow=False), SESS) == 0
+    assert _findings(db) == []

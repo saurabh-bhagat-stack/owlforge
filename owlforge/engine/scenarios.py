@@ -505,6 +505,9 @@ def unauth_action_scan(assessment_id, model: AppModel, sandbox, session_headers,
 # ---- deterministic workflow step-bypass -------------------------------------------------
 _WF_VERBS = ("approve", "publish", "complete", "confirm", "finalize", "activate",
              "settle", "submit", "ship", "fulfill")
+_STATE_PAIRS = (("status", "approved"), ("status", "published"), ("status", "completed"),
+                ("status", "active"), ("status", "paid"), ("state", "approved"),
+                ("state", "published"), ("stage", "complete"))
 
 
 def _seeded_instances(assessment_id) -> list[str]:
@@ -518,28 +521,27 @@ def _seeded_instances(assessment_id) -> list[str]:
             SurfaceItem.source == "seeded")).all() if r.url]
 
 
-def _file_workflow_bypass(assessment_id, obj_url, turl, verb):
+def _file_workflow_bypass(assessment_id, obj_url, endpoint, verb, how):
     from owlforge.store.db import session
     from owlforge.store.models import Finding
     with session() as s:
         s.add(Finding(
             id=f"find_{secrets.token_hex(5)}", assessment_id=assessment_id,
-            title="Possible workflow step bypass: privileged transition applied directly to a new object",
+            title="Possible workflow step bypass: privileged state reached directly on a new object",
             severity="high", status="candidate", confidence="medium",
-            endpoint=turl, method="POST",
+            endpoint=endpoint, method="POST",
             technical_analysis=(
-                f"owlforge created an object ({obj_url}) and then POSTed directly to {turl} — a "
-                f"'{verb}' transition — without performing any intermediate workflow step. A fresh "
-                f"read of the object afterwards showed the '{verb}' state, which was not present "
-                "before. If this transition is meant to require prior steps (payment, review) or a "
-                "different role, the state-machine ordering/authorization is not enforced."),
-            proof_of_concept=f"create {obj_url} -> POST {turl} -> object now reflects the '{verb}' state",
+                f"owlforge created an object ({obj_url}) and then reached its '{verb}' state "
+                f"directly ({how}) without performing any intermediate workflow step. A fresh read "
+                f"of the object afterwards showed the '{verb}' state, which was not present before. "
+                "If this transition is meant to require prior steps (payment, review) or a different "
+                "role, the state-machine ordering/authorization is not enforced."),
+            proof_of_concept=f"create {obj_url} -> {how} -> object now reflects the '{verb}' state",
             impact="Users can skip required workflow steps or reach terminal states out of order "
                    "(e.g. publish without review, complete an order without payment).",
             remediation="Enforce the workflow as a server-side state machine: check the object's "
                         "current state and the caller's role before every transition.",
-            validation_note="state advanced via a direct transition on a fresh object (differential) "
-                            "— verify the intended workflow"))
+            validation_note="state advanced on a fresh object (differential) — verify the intended workflow"))
         s.commit()
 
 
@@ -559,6 +561,8 @@ def workflow_bypass_scan(assessment_id, model: AppModel, sandbox, session_header
             continue
         blow = (base.get("body", "") or "").lower()
         tested += 1
+        hit = False
+        # 1) URL-convention transition:  POST /object/<verb>
         for verb in _WF_VERBS:
             stem = verb[:5]
             if stem in blow:                      # already in that state — not a bypass signal
@@ -569,10 +573,37 @@ def workflow_bypass_scan(assessment_id, model: AppModel, sandbox, session_header
                 continue
             after = (_get(sandbox, obj_url, session_headers).get("body", "") or "").lower()
             if stem in after and stem not in blow:
-                _file_workflow_bypass(assessment_id, obj_url, turl, verb)
+                _file_workflow_bypass(assessment_id, obj_url, turl, verb, f"POST {turl}")
                 log(f"scenario: workflow step bypass — '{verb}' applied directly to {obj_url}")
                 filed += 1
+                hit = True
                 break
+        # 2) body-driven state:  set status=approved / state=published on the object itself
+        if not hit:
+            for field, value in _STATE_PAIRS:
+                stem = value[:5]
+                if stem in blow:
+                    continue
+                if _is_api_url(obj_url):
+                    h = dict(session_headers)
+                    h["Content-Type"] = "application/json"
+                    try:
+                        r = sandbox.http_request("PATCH", obj_url, headers=h,
+                                                 body=json.dumps({field: value}),
+                                                 follow_redirects=False) or {}
+                    except Exception:
+                        r = {}
+                else:
+                    r = _post(sandbox, obj_url, urlencode({field: value}), session_headers)
+                if not _reachable(r):
+                    continue
+                after = (_get(sandbox, obj_url, session_headers).get("body", "") or "").lower()
+                if stem in after and stem not in blow:
+                    _file_workflow_bypass(assessment_id, obj_url, obj_url, value,
+                                          f"set {field}={value}")
+                    log(f"scenario: workflow step bypass — set {field}={value} on {obj_url}")
+                    filed += 1
+                    break
         if tested >= cap:
             break
     if filed:
