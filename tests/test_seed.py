@@ -258,3 +258,31 @@ def test_graphql_seed_input_object_mutation():
     out = graphql_seed_objects(_GQL_INV, _GqlInputApp(), {"Cookie": "s=1"}, "https://t")
     assert len(out) == 1
     assert out[0]["object_id"] == "9" and out[0]["read_field"] == "post"
+
+
+class _SpaSB:
+    """Raw GET returns an empty SPA shell (no form); the form only exists in the rendered DOM."""
+
+    def __init__(self, post_resp):
+        self._post = post_resp
+        self.posted = []
+
+    def http_request(self, method, url, *, headers=None, params=None, body=None,
+                     follow_redirects=True, timeout_ms=30000):
+        if method == "GET":
+            return {"status": 200, "headers": {}, "body": "<div id='app'></div>"}
+        self.posted.append((url, body))
+        return dict(self._post)
+
+    def render(self, url, *, headers=None, timeout_ms=30000):
+        return {"html": _REG_HTML, "final_url": url}
+
+
+def test_register_uses_rendered_dom_for_js_form():
+    inv = [{"url": "https://t/register", "method": "POST", "source": "form",
+            "params": ["email", "username", "password", "confirm_password"]}]
+    sb = _SpaSB({"status": 302, "headers": {"location": "/home"},
+                 "set_cookie": ["session=spa1; Path=/"], "body": ""})
+    ident = register_account(inv, sb, "https://t")
+    assert ident is not None and ident["headers"]["Cookie"].startswith("session=spa1")
+    assert sb.posted and "example.test" in sb.posted[0][1]

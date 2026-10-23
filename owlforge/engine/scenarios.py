@@ -38,6 +38,7 @@ from owlforge.engine.appmodel import CREATE, EDIT, TRANSITION, AppModel
 from owlforge.engine.seed import (
     _fill,
     _form_fields,
+    _form_html,
     _id_from_json,
     _id_in_body,
     _looks_like_object,
@@ -227,7 +228,7 @@ def _mass_assignment_hits(sandbox, action, session_headers) -> list[tuple[str, s
     forms and on JSON APIs (body built from the action's spec params)."""
     url, method = action.url, action.method
     params = list(getattr(action, "params", []) or [])
-    html = _get(sandbox, url, session_headers).get("body", "") or ""
+    html = _form_html(sandbox, url, session_headers)
     form_fields = _form_fields(html, url)
     use_json = (not form_fields) and (bool(params) or _is_api_url(url))
     if not form_fields and not use_json:

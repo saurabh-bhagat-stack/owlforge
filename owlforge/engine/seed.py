@@ -125,6 +125,27 @@ def _post_multipart(sandbox, url, body, ctype, headers):
         return {}
 
 
+def _form_html(sandbox, url, headers) -> str:
+    """Fetch a page's HTML for form parsing. If the raw response has no form (a JS-rendered
+    SPA) and the sandbox can render, fall back to the browser-rendered DOM so seeding sees the
+    real form fields. JSON/API responses are returned as-is (no wasteful render)."""
+    raw = _get(sandbox, url, headers).get("body", "") or ""
+    low = raw.lower()
+    if "<form" in low or _INPUT.search(raw):
+        return raw
+    if raw.strip()[:1] in "{[":
+        return raw
+    if hasattr(sandbox, "render"):
+        try:
+            d = sandbox.render(url, headers=headers or None) or {}
+            dom = d.get("html", "") or ""
+            if "<form" in dom.lower() or _INPUT.search(dom):
+                return dom
+        except Exception:
+            pass
+    return raw
+
+
 def _session_cookie(resp: dict) -> dict:
     """Build a Cookie header from any session-ish Set-Cookie on the response."""
     pairs = []
@@ -155,7 +176,7 @@ def _login(inventory, sandbox, identifiers, password,
         has_pass = any(any(x in p for x in _PASS_HINT) for p in params)
         if not (any(h in low for h in _LOGIN_HINT) or has_pass):
             continue
-        fields = _form_fields(_get(sandbox, url, None).get("body", "") or "", url)
+        fields = _form_fields(_form_html(sandbox, url, None), url)
         for p in (it.get("params") or []):
             fields.setdefault(p, "")
         if not any(any(x in n.lower() for x in _PASS_HINT) for n in fields):
@@ -200,7 +221,7 @@ def register_account(inventory, sandbox, target,
             cands.append(it)
     for it in cands[:3]:
         url = it["url"]
-        fields = _form_fields(_get(sandbox, url, None).get("body", "") or "", url)
+        fields = _form_fields(_form_html(sandbox, url, None), url)
         for p in (it.get("params") or []):
             fields.setdefault(p, "")
         if not any(any(x in n.lower() for x in _PASS_HINT) for n in fields):
@@ -270,7 +291,7 @@ def seed_objects(inventory, sandbox, session_headers, target,
         if not url or url in seen:
             continue
         seen.add(url)
-        html = _get(sandbox, url, session_headers).get("body", "") or ""
+        html = _form_html(sandbox, url, session_headers)
         fields = _form_fields(html, url)
         for p in (it.get("params") or []):
             fields.setdefault(p, "")
