@@ -405,3 +405,56 @@ def test_workflow_bypass_secure_quiet(tmp_path, monkeypatch):
     from owlforge.engine.scenarios import workflow_bypass_scan
     assert workflow_bypass_scan("a", _model_transition(), _WFApp(allow=False), SESS) == 0
     assert _findings(db) == []
+
+
+# ---- mass assignment on a pure-JSON API (no HTML form) ----------------------------------
+class _JsonApiApp:
+    """JSON API: POST /api/posts takes a JSON body; with `bind` it mass-assigns `role`."""
+
+    def __init__(self, bind):
+        self.bind = bind
+        self.n = 0
+        self.store = {}
+
+    def http_request(self, method, url, *, headers=None, params=None, body=None,
+                     follow_redirects=True, timeout_ms=30000):
+        import json as _j
+        if url.endswith("/api/posts") and method == "GET":
+            return {"status": 200, "headers": {}, "body": "{}"}        # no HTML form
+        if url.endswith("/api/posts") and method == "POST":
+            obj = _j.loads(body or "{}")
+            self.n += 1
+            rec = {"title": obj.get("title", "")}
+            if self.bind and "role" in obj:
+                rec["role"] = obj["role"]
+            self.store[self.n] = rec
+            return {"status": 201, "headers": {"location": f"/api/posts/{self.n}"},
+                    "body": _j.dumps({"id": self.n})}
+        m = re.search(r"/api/posts/(\d+)$", url)
+        if m and method == "GET":
+            o = self.store.get(int(m.group(1)))
+            if not o:
+                return {"status": 404, "headers": {}, "body": "{}"}
+            return {"status": 200, "headers": {"Content-Type": "application/json"},
+                    "body": _j.dumps({"data": {"post": o}})}
+        return {"status": 404, "headers": {}, "body": "{}"}
+
+
+def _model_json_api():
+    from owlforge.engine.appmodel import build_app_model
+    return build_app_model(
+        [{"url": "https://t/api/posts", "method": "POST", "params": ["title"], "source": "api-spec"}],
+        [{"label": "session", "role": "user", "headers": SESS}])
+
+
+def test_mass_assignment_json_api_create(tmp_path, monkeypatch):
+    db = _db(tmp_path, monkeypatch)
+    from owlforge.engine.scenarios import mass_assignment_scan
+    assert mass_assignment_scan("a", _model_json_api(), _JsonApiApp(bind=True), SESS) >= 1
+    assert any("Mass assignment" in x.title for x in _findings(db))
+
+
+def test_mass_assignment_json_api_secure_quiet(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    from owlforge.engine.scenarios import mass_assignment_scan
+    assert mass_assignment_scan("a", _model_json_api(), _JsonApiApp(bind=False), SESS) == 0

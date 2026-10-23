@@ -35,7 +35,14 @@ from collections.abc import Callable
 from urllib.parse import urlencode, urljoin
 
 from owlforge.engine.appmodel import CREATE, EDIT, TRANSITION, AppModel
-from owlforge.engine.seed import _fill, _form_fields, _id_in_body, _looks_like_object, _session_cookie
+from owlforge.engine.seed import (
+    _fill,
+    _form_fields,
+    _id_from_json,
+    _id_in_body,
+    _looks_like_object,
+    _session_cookie,
+)
 
 # privileged attributes a form should never let a normal user set
 _PRIV_FLAGS = (
@@ -79,13 +86,19 @@ def _loc(resp: dict) -> str:
     return hdrs.get("location", "") or ""
 
 
+def _is_api_url(url: str) -> bool:
+    low = (url or "").lower()
+    return "/api/" in low or "/graphql" in low or low.endswith((".json",))
+
+
 def _created_url(resp: dict, base: str) -> str | None:
     loc = _loc(resp)
     if loc:
         u = urljoin(base, loc)
         if _looks_like_object(u) or u.rstrip("/") != base.rstrip("/"):
             return u
-    return _id_in_body(resp.get("body", "") or "", base)
+    body = resp.get("body", "") or ""
+    return _id_in_body(body, base) or _id_from_json(body, base)
 
 
 def _fill_visible(fields: dict, marker: str) -> dict:
@@ -208,24 +221,41 @@ def _file_ownership(assessment_id, url, method, field_name, sentinel):
         s.commit()
 
 
-def _mass_assignment_hits(sandbox, url, method, session_headers) -> list[tuple[str, str, str]]:
+def _mass_assignment_hits(sandbox, action, session_headers) -> list[tuple[str, str, str]]:
     """Return [(category, name, value)] for extra fields that persist on a fresh read but do
-    not appear on a control object. category is 'privilege' or 'ownership'."""
+    not appear on a control object. category is 'privilege' or 'ownership'. Works on HTML
+    forms and on JSON APIs (body built from the action's spec params)."""
+    url, method = action.url, action.method
+    params = list(getattr(action, "params", []) or [])
     html = _get(sandbox, url, session_headers).get("body", "") or ""
-    fields = _form_fields(html, url)
-    if not fields:
+    form_fields = _form_fields(html, url)
+    use_json = (not form_fields) and (bool(params) or _is_api_url(url))
+    if not form_fields and not use_json:
         return []
+    base_fields = form_fields if form_fields else {p: "" for p in params}
     low = url.lower()
     is_edit = method in ("PUT", "PATCH") or any(
         k in low for k in ("edit", "update", "profile", "settings", "account"))
     extras = _priv_extras(_num_marker()) + _owner_extras("9" + str(secrets.randbelow(900_000) + 100_000))
 
+    def _poster(fields: dict) -> dict:
+        if use_json:
+            h = dict(session_headers)
+            h["Content-Type"] = "application/json"
+            m = method if method in ("POST", "PUT", "PATCH") else "POST"
+            try:
+                return sandbox.http_request(m, url, headers=h, body=json.dumps(dict(fields)),
+                                            follow_redirects=False) or {}
+            except Exception:
+                return {}
+        return _post(sandbox, url, urlencode(fields), session_headers)
+
     if is_edit:
-        base_blob = html
-        body = _fill_visible(fields, "owl" + secrets.token_hex(3))
+        base_blob = html if form_fields else (_get(sandbox, url, session_headers).get("body", "") or "")
+        body = _fill_visible(base_fields, "owl" + secrets.token_hex(3))
         for _c, n, v in extras:
             body.setdefault(n, v)
-        resp = _post(sandbox, url, urlencode(body), session_headers)
+        resp = _poster(body)
         if not _ok(resp):
             return []
         test_blob = _get(sandbox, url, session_headers).get("body", "") or resp.get("body", "") or ""
@@ -233,16 +263,16 @@ def _mass_assignment_hits(sandbox, url, method, session_headers) -> list[tuple[s
                 if _reflects(test_blob, n, v) and not _reflects(base_blob, n, v)]
 
     # CREATE: control object (no extras) vs test object (with extras), both fresh-read
-    cresp = _post(sandbox, url, urlencode(_fill_visible(fields, "owl" + secrets.token_hex(3))), session_headers)
+    cresp = _poster(_fill_visible(base_fields, "owl" + secrets.token_hex(3)))
     if not _ok(cresp):
         return []
     curl = _created_url(cresp, url)
     cblob = (_get(sandbox, curl, session_headers).get("body", "") if curl else "") or cresp.get("body", "") or ""
 
-    tbody = _fill_visible(fields, "owl" + secrets.token_hex(3))
+    tbody = _fill_visible(base_fields, "owl" + secrets.token_hex(3))
     for _c, n, v in extras:
         tbody.setdefault(n, v)
-    tresp = _post(sandbox, url, urlencode(tbody), session_headers)
+    tresp = _poster(tbody)
     if not _ok(tresp):
         return []
     turl = _created_url(tresp, url)
@@ -268,7 +298,7 @@ def mass_assignment_scan(assessment_id, model: AppModel, sandbox, session_header
             continue
         seen.add(a.url)
         tested += 1
-        hits = _mass_assignment_hits(sandbox, a.url, a.method, session_headers)
+        hits = _mass_assignment_hits(sandbox, a, session_headers)
         priv = next((h for h in hits if h[0] == "privilege"), None)
         own = next((h for h in hits if h[0] == "ownership"), None)
         if priv:
