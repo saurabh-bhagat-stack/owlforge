@@ -66,3 +66,24 @@ def test_noop_without_money_params(tmp_path, monkeypatch):
     inv = [{"url": "https://t/search", "method": "GET", "params": ["q"]}]
     assert bizlogic_scan("a3", inv, _SB(), {}) == 0
     assert bizlogic_scan("a4", INV, None, {}) == 0  # no sandbox
+
+
+class _Echo:
+    """Reflects whatever value is sent, with no validation error (accepts everything)."""
+
+    def http_request(self, method, url, *, headers=None, params=None, body=None, timeout_ms=30_000):
+        return {"status": 200, "body": f"cart updated: {params} {body}"}
+
+
+def test_zero_and_fractional_flagged(tmp_path, monkeypatch):
+    db = _db(tmp_path, monkeypatch)
+    from sqlmodel import select
+
+    from owlforge.engine.bizlogic import bizlogic_scan
+    from owlforge.store.models import Finding
+    n = bizlogic_scan("a5", INV, _Echo(), {})
+    assert n == 1
+    with db.session() as s:
+        f = s.exec(select(Finding).where(Finding.assessment_id == "a5")).one()
+    assert "amount" in f.title
+    assert "0.01" in f.proof_of_concept and "-1" in f.proof_of_concept
