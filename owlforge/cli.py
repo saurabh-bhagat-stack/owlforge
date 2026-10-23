@@ -322,6 +322,9 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
                            log=lambda m: emit("status", m))
         workflow_bypass_scan(aid, _model, sandbox_client, session_headers,
                              log=lambda m: emit("status", m))
+        from owlforge.engine.raceprobe import race_scan
+        race_scan(aid, _model, sandbox_client, session_headers,
+                  log=lambda m: emit("status", m))
         from owlforge.engine.authlogic import jwt_scan
         jwt_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                  log=lambda m: emit("status", m))
