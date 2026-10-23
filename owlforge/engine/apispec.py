@@ -21,6 +21,37 @@ _SPEC_EXT = (".json", ".yaml", ".yml")
 _METHODS = ("get", "post", "put", "patch", "delete")
 
 
+def _resolve_ref(spec: dict, ref: str) -> dict:
+    if not isinstance(ref, str) or not ref.startswith("#/"):
+        return {}
+    node = spec
+    for part in ref[2:].split("/"):
+        if isinstance(node, dict) and part in node:
+            node = node[part]
+        else:
+            return {}
+    return node if isinstance(node, dict) else {}
+
+
+def _schema_props(schema, spec: dict, depth: int = 0) -> list[str]:
+    """Property names from an OpenAPI/Swagger schema (resolves $ref, allOf/oneOf/anyOf,
+    array items), so request-body fields become testable params."""
+    if not isinstance(schema, dict) or depth > 4:
+        return []
+    if "$ref" in schema:
+        return _schema_props(_resolve_ref(spec, schema["$ref"]), spec, depth + 1)
+    out: list[str] = []
+    props = schema.get("properties")
+    if isinstance(props, dict):
+        out.extend(str(k) for k in props)
+    for comb in ("allOf", "oneOf", "anyOf"):
+        for sub in schema.get(comb, []) or []:
+            out.extend(_schema_props(sub, spec, depth + 1))
+    if schema.get("type") == "array":
+        out.extend(_schema_props(schema.get("items"), spec, depth + 1))
+    return out
+
+
 def looks_like_spec_file(target: str) -> bool:
     """True when the target is a local file we should parse as an API description."""
     if not target:
@@ -72,6 +103,13 @@ def openapi_to_items(spec: dict, base_url: str) -> list[dict]:
                 for pr in op.get("parameters", []) or []:
                     if isinstance(pr, dict) and pr.get("name"):
                         params.append(str(pr["name"]))
+                    if isinstance(pr, dict) and pr.get("in") == "body":
+                        params.extend(_schema_props(pr.get("schema") or {}, spec))
+                rb = op.get("requestBody")
+                if isinstance(rb, dict):
+                    for media in (rb.get("content") or {}).values():
+                        if isinstance(media, dict):
+                            params.extend(_schema_props(media.get("schema") or {}, spec))
             # truncate at the first path-template segment (consistent with recon discovery)
             clean = origin + ("/" + str(path).lstrip("/")).split("{")[0].rstrip("/")
             out.append({"url": clean or origin + "/" + str(path).lstrip("/"),
@@ -129,6 +167,20 @@ def postman_to_items(coll: dict) -> tuple[str, list[dict]]:
                 continue
             method = str(req.get("method", "GET")).upper()
             raw, params = _raw_url(req.get("url"))
+            pbody = req.get("body")
+            if isinstance(pbody, dict):
+                mode = pbody.get("mode")
+                if mode in ("urlencoded", "formdata"):
+                    for kv in pbody.get(mode, []) or []:
+                        if isinstance(kv, dict) and kv.get("key"):
+                            params.append(str(kv["key"]))
+                elif mode == "raw":
+                    try:
+                        j = json.loads(pbody.get("raw") or "")
+                        if isinstance(j, dict):
+                            params.extend(str(k) for k in j)
+                    except Exception:
+                        pass
             raw = _subst(raw, vars_).split("?")[0].strip()
             if not raw:
                 continue

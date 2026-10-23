@@ -75,3 +75,40 @@ def test_looks_like_spec_file(tmp_path):
     assert looks_like_spec_file("https://example.com") is False
     assert looks_like_spec_file("example.com") is False
     assert looks_like_spec_file(str(tmp_path / "missing.yaml")) is False  # not a file
+
+
+def test_openapi3_requestbody_params_with_ref():
+    oas = {"openapi": "3.0.0", "servers": [{"url": "https://api.ex.com"}],
+           "components": {"schemas": {"NewPost": {"type": "object",
+                          "properties": {"title": {}, "body": {}, "role": {}}}}},
+           "paths": {"/posts": {"post": {"requestBody": {"content": {"application/json":
+                     {"schema": {"$ref": "#/components/schemas/NewPost"}}}}}}}}
+    items = openapi_to_items(oas, openapi_base(oas))
+    post = next(i for i in items if i["url"].endswith("/posts"))
+    assert set(post["params"]) == {"title", "body", "role"}
+
+
+def test_swagger2_in_body_params():
+    sw = {"swagger": "2.0", "host": "h.ex.com", "schemes": ["https"],
+          "paths": {"/users": {"post": {"parameters": [
+              {"name": "x", "in": "query"},
+              {"in": "body", "name": "payload", "schema": {"type": "object",
+               "properties": {"email": {}, "is_admin": {}}}}]}}}}
+    items = openapi_to_items(sw, openapi_base(sw))
+    post = next(i for i in items if i["url"].endswith("/users"))
+    assert {"x", "email", "is_admin"} <= set(post["params"])
+
+
+def test_postman_body_params():
+    pm = {"info": {"schema": "https://schema.getpostman.com/json/collection/v2.1.0/"},
+          "variable": [{"key": "baseUrl", "value": "https://p.ex.com"}],
+          "item": [
+              {"request": {"method": "POST", "url": {"raw": "{{baseUrl}}/posts"},
+                           "body": {"mode": "raw", "raw": '{"title":"t","role":"admin"}'}}},
+              {"request": {"method": "POST", "url": {"raw": "{{baseUrl}}/login"},
+                           "body": {"mode": "urlencoded",
+                                    "urlencoded": [{"key": "user"}, {"key": "pass"}]}}}]}
+    _base, items = postman_to_items(pm)
+    byurl = {i["url"]: i for i in items}
+    assert {"title", "role"} <= set(byurl["https://p.ex.com/posts"]["params"])
+    assert {"user", "pass"} <= set(byurl["https://p.ex.com/login"]["params"])
