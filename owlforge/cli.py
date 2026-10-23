@@ -339,6 +339,9 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
                               log=lambda m: emit("status", m))
         stored_injection_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                               log=lambda m: emit("status", m))
+        from owlforge.engine.apiabuse import api_fuzz_scan
+        api_fuzz_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                      log=lambda m: emit("status", m))
         from owlforge.engine.bizlogic import bizlogic_scan
         bizlogic_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                       log=lambda m: emit("status", m))
