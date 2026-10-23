@@ -627,8 +627,21 @@ def run(
         if identity_set is None and session_headers:
             identity_set = [{"label": "session", "role": "user", "headers": session_headers}]
         _reg = register_account(_inv, sandbox_client, target, log=_slog)
-        if _reg and identity_set is not None:
+        if _reg:
+            _reg["label"] = "owlforge-user-a"
+            if not session_headers and _reg.get("headers"):
+                session_headers = _reg["headers"]   # no operator creds — operate as this account
+                _slog("no operator session — operating as a self-registered account")
+            if identity_set is None:
+                identity_set = []
             identity_set.append(_reg)
+            # multi-user depth: a second throwaway account enables horizontal (A-vs-B)
+            # access-control testing even when the operator supplied no identities
+            _reg2 = register_account(_inv, sandbox_client, target, log=_slog)
+            if _reg2 and _reg2.get("headers") and _reg2.get("headers") != _reg.get("headers"):
+                _reg2["label"] = "owlforge-user-b"
+                identity_set.append(_reg2)
+                _slog("provisioned a second throwaway account for A-vs-B authz testing")
         _seeded = seed_objects(_inv, sandbox_client, session_headers, target, log=_slog)
         if _seeded:
             _pn(aid, _seeded, cap=400)
