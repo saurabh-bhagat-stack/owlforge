@@ -11,6 +11,8 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
+from owlforge.engine.seed import _attrs
+
 RequestFn = Callable[..., dict]
 
 # common anti-CSRF field names (case-insensitive)
@@ -20,7 +22,6 @@ _TOKEN_NAMES = (
     "xsrf-token", "xsrf_token", "xsrf", "_token", "anti-forgery", "antiforgery",
 )
 _INPUT_RE = re.compile(r"<input\b[^>]*>", re.I)
-_ATTR_RE = re.compile(r'(\w[\w:-]*)\s*=\s*"([^"]*)"')
 
 
 def _is_token_name(name: str) -> bool:
@@ -32,7 +33,7 @@ def extract_token(html: str) -> tuple[str, str] | None:
     """Return (field_name, value) of the first anti-CSRF hidden input in the HTML, or
     None. Also catches a <meta name="csrf-token" content="..."> style token."""
     for tag in _INPUT_RE.findall(html or ""):
-        attrs = {k.lower(): v for k, v in _ATTR_RE.findall(tag)}
+        attrs = _attrs(tag)
         name = attrs.get("name", "")
         if name and _is_token_name(name) and attrs.get("value"):
             return name, attrs["value"]
@@ -109,7 +110,7 @@ def _csrf_form_fields(html: str, action: str) -> dict[str, str]:
         chosen = forms[0][1]
     fields: dict[str, str] = {}
     for tag in _INPUT_RE.findall(chosen):
-        a = {k.lower(): v for k, v in _ATTR_RE.findall(tag)}
+        a = _attrs(tag)
         name = a.get("name")
         if not name or (a.get("type") or "text").lower() in ("submit", "button", "image", "reset", "file"):
             continue

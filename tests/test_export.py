@@ -69,3 +69,32 @@ def test_builder_emits_all_three(tmp_path, monkeypatch):
     assert (d / "report.md").exists()
     assert (d / "report.html").exists()
     assert (d / "report.sarif.json").exists()
+
+
+def test_classify_new_finding_types():
+    """The report classifier recognises the scenario-engine / authz finding titles
+    (they must not fall through to CWE-0 / 'other' in reports and SARIF)."""
+    from types import SimpleNamespace
+
+    from owlforge.report.export import classify_finding
+
+    def cls(title):
+        return classify_finding(SimpleNamespace(title=title))
+
+    cid, cwe, _ = cls("Mass assignment / privilege escalation via 'role'")
+    assert cid == "mass-assignment" and cwe == "CWE-915"
+
+    cid, cwe, _ = cls("Client-controlled object ownership via 'author_id'")
+    assert cid == "broken-access-control" and cwe == "CWE-862"
+
+    cid, _, _ = cls("Privileged state-changing action reachable without authentication")
+    assert cid == "broken-access-control"
+
+    cid, _, _ = cls("Broken function-level authorization: a non-owner can edit another user's object")
+    assert cid == "broken-access-control"
+
+    cid, _, _ = cls("Privilege escalation at registration via 'is_admin'")
+    assert cid == "broken-access-control"
+
+    # unrelated titles still fall through cleanly
+    assert cls("A totally unknown issue")[0] == "other"

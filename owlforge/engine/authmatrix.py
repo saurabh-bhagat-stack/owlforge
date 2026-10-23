@@ -18,7 +18,7 @@ import secrets
 from collections.abc import Callable
 from urllib.parse import urlencode, urljoin
 
-from owlforge.engine.seed import _form_fields
+from owlforge.engine.seed import _attrs, _form_fields
 
 _OBJ_ID = re.compile(r"/(\d+|[0-9a-f]{8}-[0-9a-f-]{20,})(?:[/?]|$)", re.I)
 _EDITABLE = ("title", "name", "body", "content", "text", "description", "comment", "subject",
@@ -56,7 +56,7 @@ def _affordances(sandbox, obj_url, owner_headers):
     html = page.get("body", "") or ""
     edits, deletes = [], []
     for attrs, _body in re.findall(r"<form\b([^>]*)>(.*?)</form>", html, re.I | re.S):
-        a = dict(re.findall(r'(\w[\w:-]*)\s*=\s*"([^"]*)"', attrs))
+        a = _attrs(attrs)
         action = urljoin(obj_url, a.get("action", obj_url))
         method = (a.get("method", "GET") or "GET").upper()
         low = action.lower()

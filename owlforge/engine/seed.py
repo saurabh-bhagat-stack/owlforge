@@ -19,7 +19,15 @@ from urllib.parse import urlencode, urljoin
 
 _INPUT = re.compile(r"<input\b[^>]*>", re.I)
 _TEXTAREA = re.compile(r"<textarea\b([^>]*)>", re.I)
-_ATTR = re.compile(r'(\w[\w:-]*)\s*=\s*"([^"]*)"')
+_ATTR = re.compile(r"""(\w[\w:-]*)\s*=\s*(?:"([^"]*)"|\'([^\']*)\'|([^\s"\'<>`]+))""")
+
+
+def _attrs(s: str) -> dict[str, str]:
+    """Parse HTML tag attributes, tolerating double-quoted, single-quoted and unquoted values."""
+    out: dict[str, str] = {}
+    for name, dq, sq, uq in _ATTR.findall(s or ""):
+        out[name.lower()] = dq or sq or uq or ""
+    return out
 _FILE_INPUT = re.compile(r'<input\b[^>]*type\s*=\s*["\']?file["\']?[^>]*>', re.I)
 _NAME = re.compile(r'name\s*=\s*["\']?([\w\[\]-]+)', re.I)
 
@@ -44,13 +52,13 @@ def _form_fields(html: str, action: str) -> dict[str, str]:
     body = next((b for a, b in forms if tail and tail in a), forms[0][1])
     out: dict[str, str] = {}
     for tag in _INPUT.findall(body):
-        a = {k.lower(): v for k, v in _ATTR.findall(tag)}
+        a = _attrs(tag)
         name = a.get("name")
         if not name or (a.get("type") or "text").lower() in ("submit", "button", "image", "reset", "file"):
             continue
         out[name] = a.get("value", "")
     for attrs in _TEXTAREA.findall(body):
-        a = {k.lower(): v for k, v in _ATTR.findall(attrs)}
+        a = _attrs(attrs)
         if a.get("name"):
             out.setdefault(a["name"], "")
     return out

@@ -159,3 +159,28 @@ def test_seed_multipart_upload_create():
     assert len(out) == 1 and out[0]["url"] == "https://t/files/9"
     assert "multipart/form-data" in sent["ct"]
     assert 'filename="owl' in sent["body"] and 'name="document"' in sent["body"]
+
+
+def test_form_fields_unquoted_and_single_quoted_attrs():
+    """Real-world HTML uses unquoted and single-quoted attributes, not only double quotes."""
+    html = ("<form action=/posts/create method=post>"
+            "<input name=title value=''>"
+            "<input name='body' value='v'>"
+            '<input type=hidden name="csrf" value="T"></form>')
+    f = _form_fields(html, "/posts/create")
+    assert "title" in f and "body" in f and "csrf" in f
+    assert f["body"] == "v"
+
+
+def test_register_account_with_unquoted_html():
+    """Registration must still be detected when the form uses unquoted attributes."""
+    reg = ("<form action=/register method=post>"
+           "<input name=email><input type=password name=password>"
+           "<input type=password name=confirm_password></form>")
+    inv = [{"url": "https://t/register", "method": "POST", "source": "form",
+            "params": ["email", "password", "confirm_password"]}]
+    sb = _SB(reg, {"status": 302, "headers": {"location": "/home"},
+                   "set_cookie": ["session=uq9; Path=/"], "body": ""})
+    ident = register_account(inv, sb, "https://t")
+    assert ident is not None and ident["headers"]["Cookie"].startswith("session=uq9")
+    assert "example.test" in sb.posted[0][1]
