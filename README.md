@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-336%20passing-2dd4bf">
+  <img alt="tests" src="https://img.shields.io/badge/tests-348%20passing-2dd4bf">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-22d3ee">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-5b7891">
   <img alt="status" src="https://img.shields.io/badge/status-beta-f59e0b">
@@ -37,7 +37,7 @@ to nudge the running scan:
 
 > _Illustrative; findings are representative of a run against a deliberately-vulnerable
 > test app. Keys: ↑↓ navigate · enter/click details · `/` filter · `s` sort · `v` severity ·
-> `m`-less steer box at the bottom · `L` raw log · `Ctrl+Q` quit._
+> steer box always at the bottom · `L` raw log · `Ctrl+Q` quit._
 
 Prefer plain output? Omit `-D` for a scrollable streaming log (and `-n` for headless CI).
 
@@ -50,10 +50,10 @@ a frontier model** through the identical OpenAI-compatible path — no special-c
 
 ## How it works
 ```
-SETUP → RECON → UNDERSTAND → AUTH → PLAN → HUNT → VALIDATE → DEEPEN → dedupe → REPORT
-        (always   (secrets/   (auto-  (orchestr-  (special-  (evidence   (opt-in
-         unauth    PII/JS→API)  escal-  ator +      ist        gate)       read-only
-         first)                 ate)    PRE-PROBE)  agents)                proof)
+SETUP → RECON → UNDERSTAND → AUTH → SEED → PLAN → HUNT → VALIDATE → DEEPEN → dedupe → REPORT
+        (always   (secrets/   (auto-  (make  (orchestr-  (special-  (evidence   (opt-in
+         unauth    PII/JS→API)  escal-  test   ator +      ist +      gate)       read-only
+         first)                 ate)   data)  PRE-PROBE)  scenarios)             proof)
 ```
 - **Recon is deterministic.** A crawler + ffuf content-discovery + katana (JS-aware
   crawl) + JS/param extraction + fingerprint + wafw00f (WAF/CDN detection) map the
@@ -64,8 +64,8 @@ SETUP → RECON → UNDERSTAND → AUTH → PLAN → HUNT → VALIDATE → DEEPE
 - **Auth is one pipeline, not a mode.** Unauth recon runs first; owlforge then
   auto-escalates to an authenticated pass when credentials are provided, discovered
   (leaked in JS/exposed files), or **harvested from the login page**. SSO/MFA is captured
-  via a headed in-sandbox browser exposed over noVNC (human-in-the-loop); TOTP is
-  automated (RFC-6238).
+  via a headed in-sandbox browser exposed over noVNC (human-in-the-loop) and **reused on
+  later runs** while still valid; TOTP is automated (RFC-6238).
 - **Planning gates the model.** The orchestrator classifies every parameter and a
   deterministic **pre-probe** tests each gateable class first; it **auto-files** findings
   it confirms itself, so recall never depends on the model remembering to file.
@@ -87,12 +87,26 @@ SETUP → RECON → UNDERSTAND → AUTH → PLAN → HUNT → VALIDATE → DEEPE
 - **Methodology knowledge packs.** Per-class / per-framework markdown packs
   (`owlforge/knowledge/`) are injected into the relevant specialist's prompt, matched
   to what recon fingerprinted — deepen coverage by adding a file, not code.
-- **Targets include API descriptions.** Point it at an OpenAPI/Swagger (JSON/YAML) or
-  Postman collection and every operation is tested without crawling.
+- **It acts like a tester, statefully.** When the app allows it, owlforge registers
+  throwaway accounts (logging in two-step when sign-up needs it), creates its own test
+  objects — via HTML forms, JSON APIs, multipart uploads, or GraphQL mutations — and
+  captures the ids the app returns, so access-control and business-logic tests run on data
+  owlforge created itself, not just what it can read.
+- **Business-logic & authorization engine.** From the mapped surface, identities and seeded
+  objects it builds an app model (entities / roles / workflows) and reasons over it: mass
+  assignment & privilege escalation (at sign-up and on objects), client-controlled
+  ownership, a cross-actor edit/delete matrix, a per-role capability matrix (forced-browsing
+  / vertical privesc), workflow step-bypass, unauthenticated privileged actions, race
+  conditions on single-use actions, and weak coupon validation. Provable cases are
+  `validated`; intent-dependent ones are honest `candidate`s for a human to judge.
+- **API-aware.** OpenAPI/Swagger (JSON/YAML) and Postman operations are tested without
+  crawling: request-body fields are fuzzed as JSON, operations the spec marks protected are
+  checked for missing authentication, and undocumented state-changing methods are surfaced
+  via OPTIONS (non-destructively).
 
 Vuln classes: SQLi · reflected/DOM/stored XSS · access-control (IDOR + horizontal/vertical
 privesc) · path-traversal · SSRF · open-redirect · CRLF · CSRF · SSTI · RCE · NoSQL · XXE ·
-deserialization · file-upload · GraphQL · info-disclosure · WebSocket · request-smuggling.
+deserialization · file-upload · GraphQL (incl. cross-session IDOR) · info-disclosure · WebSocket · request-smuggling · business logic (mass assignment, workflow bypass, race conditions, forced-browsing privesc).
 
 **Known-CVE coverage.** Recon runs **nuclei** with its full baked template set, so known
 CVEs and misconfigurations are flagged out of the box (e.g. Log4Shell, Spring4Shell,
@@ -242,6 +256,7 @@ owlforge tells you to start it rather than silently running a weaker host-only s
   reliable than a frontier model — the deterministic recon + pre-probe + auto-file layer
   is what makes weak models productive. Stronger model = broader coverage, same pipeline.
 - Request-smuggling is **detection-only** (low-confidence candidate; no exploitation).
+- Business-logic, workflow, race-condition, forced-browsing and method-exposure checks are reported as **candidates** — their severity depends on the app's intended policy, so a human confirms them; owlforge does not fabricate `validated` for intent-dependent classes.
 - Reports export to **Markdown, HTML, and SARIF 2.1.0** (CWE/OWASP-tagged for CI).
 - Out of scope by design: non-web surfaces (thick-client/mobile/gRPC/SOAP), and any
   destructive action — proof is always read-only (e.g. RCE proven with `id`/`hostname`).
@@ -252,16 +267,15 @@ Beta — the known gaps still being worked on:
 
 - **White-box mode** — optional source-aware pass (secret scan + SAST) to prioritise
   dynamic testing; also unlocks PR diff-scope.
-- **Deeper API abuse** — spec ingestion, JSON mass-assignment and JSON-body injection
-  fuzzing are in place; still to come: schema-aware auth and more API-specific abuse cases.
 - **SSO breadth** — automated sign-in across more IdPs (today: form login, login-page
   harvest, headed noVNC capture with session reuse, and RFC-6238 TOTP).
 
-Recently shipped (previously on this list): the business-logic / scenario engine (mass
-assignment, workflow step-bypass, cross-actor authz, unauth-action checks), a per-role
-capability matrix (forced-browsing / vertical privilege escalation), API JSON-body injection
-fuzzing, the race-condition probe, GraphQL cross-session IDOR, logout/session-invalidation
-confirmation, and broader CORS checks.
+Recently shipped (previously on this list): stateful seeding (register/login, create via
+form/JSON/multipart/GraphQL); the business-logic / scenario engine (mass assignment, workflow
+step-bypass, cross-actor authz, unauth-action checks, race conditions, weak coupons); a
+per-role capability matrix (forced-browsing / vertical privilege escalation); full API abuse
+(JSON-body injection fuzzing, schema-aware missing-auth, undocumented-method exposure);
+GraphQL cross-session IDOR; and SSO session reuse.
 
 ## Development
 ```bash
