@@ -342,6 +342,9 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
         from owlforge.engine.bizlogic import bizlogic_scan
         bizlogic_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                       log=lambda m: emit("status", m))
+        from owlforge.engine.bizlogic import coupon_scan
+        coupon_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                    log=lambda m: emit("status", m))
         from owlforge.engine.sessionlogic import session_scan
         session_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                      log=lambda m: emit("status", m))

@@ -87,3 +87,42 @@ def test_zero_and_fractional_flagged(tmp_path, monkeypatch):
         f = s.exec(select(Finding).where(Finding.assessment_id == "a5")).one()
     assert "amount" in f.title
     assert "0.01" in f.proof_of_concept and "-1" in f.proof_of_concept
+
+
+class _CouponApp:
+    def __init__(self, valid_any, reusable=True):
+        self.valid_any = valid_any
+        self.reusable = reusable
+        self.used = False
+
+    def http_request(self, method, url, *, headers=None, params=None, body=None, timeout_ms=30_000):
+        blob = f"{params} {body}"
+        if "OWLSAVE50" in blob:
+            if not self.valid_any:
+                return {"status": 200, "body": "Invalid coupon code"}
+            if self.used and not self.reusable:
+                return {"status": 200, "body": "coupon already used"}
+            self.used = True
+            return {"status": 200, "body": "Discount applied, you saved 50%"}
+        return {"status": 200, "body": "ok"}
+
+
+COUPON_INV = [{"url": "https://t/checkout", "method": "POST", "params": ["coupon"]}]
+
+
+def test_weak_coupon_flagged(tmp_path, monkeypatch):
+    db = _db(tmp_path, monkeypatch)
+    from sqlmodel import select
+
+    from owlforge.engine.bizlogic import coupon_scan
+    from owlforge.store.models import Finding
+    assert coupon_scan("c1", COUPON_INV, _CouponApp(valid_any=True), {}) == 1
+    with db.session() as s:
+        f = s.exec(select(Finding).where(Finding.assessment_id == "c1")).one()
+    assert "coupon" in f.title.lower() and f.status == "candidate"
+
+
+def test_strict_coupon_quiet(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    from owlforge.engine.bizlogic import coupon_scan
+    assert coupon_scan("c2", COUPON_INV, _CouponApp(valid_any=False), {}) == 0
