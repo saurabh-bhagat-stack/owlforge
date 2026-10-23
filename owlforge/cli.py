@@ -276,6 +276,7 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
             register_privilege_scan,
             run_business_logic_specialist,
             unauth_action_scan,
+            workflow_bypass_scan,
         )
         from owlforge.store.models import SurfaceItem
         with session() as _ms:
@@ -319,6 +320,8 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
                                 log=lambda m: emit("status", m))
         unauth_action_scan(aid, _model, sandbox_client, session_headers,
                            log=lambda m: emit("status", m))
+        workflow_bypass_scan(aid, _model, sandbox_client, session_headers,
+                             log=lambda m: emit("status", m))
         from owlforge.engine.authlogic import jwt_scan
         jwt_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                  log=lambda m: emit("status", m))

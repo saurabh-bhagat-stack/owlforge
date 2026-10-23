@@ -359,3 +359,49 @@ def test_mass_assignment_json_secure_quiet(tmp_path, monkeypatch):
     _db(tmp_path, monkeypatch)
     from owlforge.engine.scenarios import mass_assignment_scan
     assert mass_assignment_scan("a", _model_create(), _CreateJsonApp(bind=False), SESS) == 0
+
+
+# ---- deterministic workflow step-bypass -------------------------------------------------
+def _seed_surface(db, url="https://t/orders/5"):
+    from owlforge.store.models import SurfaceItem
+    with db.session() as s:
+        s.add(SurfaceItem(id="sf1", assessment_id="a", url=url, method="GET",
+                          params=[], source="seeded"))
+        s.commit()
+
+
+class _WFApp:
+    """An order in 'draft'; POST .../approve either applies (-> 'approved') or is forbidden."""
+
+    def __init__(self, allow):
+        self.allow = allow
+        self.state = "draft"
+
+    def http_request(self, method, url, *, headers=None, params=None, body=None,
+                     follow_redirects=True, timeout_ms=30000):
+        if url.endswith("/orders/5") and method == "GET":
+            return {"status": 200, "headers": {}, "body": f"<div>state: {self.state}</div>"}
+        if url.endswith("/orders/5/approve") and method == "POST":
+            if not self.allow:
+                return {"status": 403, "headers": {}, "body": "forbidden"}
+            self.state = "approved"
+            return {"status": 302, "headers": {"location": "/orders/5"}, "body": ""}
+        return {"status": 404, "headers": {}, "body": ""}
+
+
+def test_workflow_bypass_candidate(tmp_path, monkeypatch):
+    db = _db(tmp_path, monkeypatch)
+    _seed_surface(db)
+    from owlforge.engine.scenarios import workflow_bypass_scan
+    n = workflow_bypass_scan("a", _model_transition(), _WFApp(allow=True), SESS)
+    assert n >= 1
+    assert any("workflow step bypass" in x.title.lower() and x.status == "candidate"
+               for x in _findings(db))
+
+
+def test_workflow_bypass_secure_quiet(tmp_path, monkeypatch):
+    db = _db(tmp_path, monkeypatch)
+    _seed_surface(db)
+    from owlforge.engine.scenarios import workflow_bypass_scan
+    assert workflow_bypass_scan("a", _model_transition(), _WFApp(allow=False), SESS) == 0
+    assert _findings(db) == []
