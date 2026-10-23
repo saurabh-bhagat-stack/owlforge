@@ -28,6 +28,7 @@ marker data.
 
 from __future__ import annotations
 
+import json
 import re
 import secrets
 from collections.abc import Callable
@@ -104,9 +105,37 @@ def _near(blob: str, name: str, val: str, window: int = 72) -> bool:
         start = i + 1
 
 
+def _scalar_eq(v, vl: str) -> bool:
+    if isinstance(v, bool):
+        return str(v).lower() == vl or (v and vl in ("true", "1", "yes"))
+    return str(v).lower() == vl or vl in str(v).lower()
+
+
+def _json_has(obj, name: str, val: str) -> bool:
+    """True if a JSON structure carries name:val anywhere (nested) — key matched exactly,
+    value matched by scalar equality/substring. Handles nested API responses."""
+    nl = name.lower()
+    if isinstance(obj, dict):
+        for k, v in obj.items():
+            if str(k).lower() == nl and not isinstance(v, (dict, list)) and _scalar_eq(v, val.lower()):
+                return True
+            if _json_has(v, name, val):
+                return True
+    elif isinstance(obj, list):
+        return any(_json_has(x, name, val) for x in obj)
+    return False
+
+
 def _reflects(blob: str, name: str, val: str) -> bool:
     if not blob:
         return False
+    b = blob.strip()
+    if b[:1] in "{[":                      # JSON-structural (nested API responses)
+        try:
+            if _json_has(json.loads(b), name, val):
+                return True
+        except Exception:
+            pass
     pat = re.compile(re.escape(name) + r'["\']?\s*[:=>]\s*["\']?\s*' + re.escape(val), re.I)
     return bool(pat.search(blob)) or _near(blob, name, val)
 

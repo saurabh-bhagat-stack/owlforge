@@ -304,3 +304,58 @@ def test_unauth_action_secure_is_quiet(tmp_path, monkeypatch):
     n = unauth_action_scan("a", _model_transition(), _TransApp(require_auth=True), SESS)
     assert n == 0
     assert _findings(db) == []
+
+
+# ---- nested-JSON proof awareness --------------------------------------------------------
+def test_reflects_nested_json():
+    from owlforge.engine.scenarios import _reflects
+    assert _reflects('{"data":{"user":{"role":"admin"}}}', "role", "admin")
+    assert _reflects('{"account":{"is_admin":true}}', "is_admin", "true")
+    assert _reflects('{"o":{"balance":7000123}}', "balance", "7000123")
+    assert not _reflects('{"user":{"name":"bob"}}', "role", "admin")
+    assert _reflects("<span>role: admin</span>", "role", "admin")  # html path intact
+
+
+class _CreateJsonApp:
+    """Form create, but the stored object is served back as (nested) JSON."""
+
+    def __init__(self, bind):
+        self.bind = bind
+        self.n = 0
+        self.store = {}
+
+    def http_request(self, method, url, *, headers=None, params=None, body=None,
+                     follow_redirects=True, timeout_ms=30000):
+        if url.endswith("/posts") and method == "GET":
+            return {"status": 200, "headers": {}, "body":
+                    '<form action="/posts" method="post"><input name="title" value=""></form>'}
+        if url.endswith("/posts") and method == "POST":
+            q = {k: v[0] for k, v in parse_qs(body or "").items()}
+            self.n += 1
+            obj = {"title": q.get("title", "")}
+            if self.bind and "role" in q:
+                obj["role"] = q["role"]
+            self.store[self.n] = obj
+            return {"status": 302, "headers": {"location": f"/posts/{self.n}"}, "body": ""}
+        m = re.search(r"/posts/(\d+)$", url)
+        if m and method == "GET":
+            o = self.store.get(int(m.group(1)))
+            if not o:
+                return {"status": 404, "headers": {}, "body": "{}"}
+            import json as _j
+            return {"status": 200, "headers": {"Content-Type": "application/json"},
+                    "body": _j.dumps({"data": {"post": o}})}
+        return {"status": 404, "headers": {}, "body": ""}
+
+
+def test_mass_assignment_detected_in_json_read(tmp_path, monkeypatch):
+    db = _db(tmp_path, monkeypatch)
+    from owlforge.engine.scenarios import mass_assignment_scan
+    assert mass_assignment_scan("a", _model_create(), _CreateJsonApp(bind=True), SESS) >= 1
+    assert any("Mass assignment" in x.title for x in _findings(db))
+
+
+def test_mass_assignment_json_secure_quiet(tmp_path, monkeypatch):
+    _db(tmp_path, monkeypatch)
+    from owlforge.engine.scenarios import mass_assignment_scan
+    assert mass_assignment_scan("a", _model_create(), _CreateJsonApp(bind=False), SESS) == 0
