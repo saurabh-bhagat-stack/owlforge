@@ -3,7 +3,7 @@
 </p>
 
 <p align="center">
-  <img alt="tests" src="https://img.shields.io/badge/tests-348%20passing-2dd4bf">
+  <img alt="tests" src="https://img.shields.io/badge/tests-353%20passing-2dd4bf">
   <img alt="python" src="https://img.shields.io/badge/python-3.11%2B-22d3ee">
   <img alt="license" src="https://img.shields.io/badge/license-MIT-5b7891">
   <img alt="status" src="https://img.shields.io/badge/status-beta-f59e0b">
@@ -65,7 +65,9 @@ SETUP → RECON → UNDERSTAND → AUTH → SEED → PLAN → HUNT → VALIDATE 
   auto-escalates to an authenticated pass when credentials are provided, discovered
   (leaked in JS/exposed files), or **harvested from the login page**. SSO/MFA is captured
   via a headed in-sandbox browser exposed over noVNC (human-in-the-loop) and **reused on
-  later runs** while still valid; TOTP is automated (RFC-6238).
+  later runs** while still valid; TOTP is automated (RFC-6238). owlforge also detects which
+  SSO provider an app uses (Google / Microsoft / Okta / Auth0 / GitHub / SAML / OIDC / …) and
+  checks its OAuth2 authorization request for misconfig (missing `state`, implicit flow).
 - **Planning gates the model.** The orchestrator classifies every parameter and a
   deterministic **pre-probe** tests each gateable class first; it **auto-files** findings
   it confirms itself, so recall never depends on the model remembering to file.
@@ -106,7 +108,7 @@ SETUP → RECON → UNDERSTAND → AUTH → SEED → PLAN → HUNT → VALIDATE 
 
 Vuln classes: SQLi · reflected/DOM/stored XSS · access-control (IDOR + horizontal/vertical
 privesc) · path-traversal · SSRF · open-redirect · CRLF · CSRF · SSTI · RCE · NoSQL · XXE ·
-deserialization · file-upload · GraphQL (incl. cross-session IDOR) · info-disclosure · WebSocket · request-smuggling · business logic (mass assignment, workflow bypass, race conditions, forced-browsing privesc).
+deserialization · file-upload · GraphQL (incl. cross-session IDOR) · info-disclosure · WebSocket · request-smuggling · business logic (mass assignment, workflow bypass, race conditions, forced-browsing privesc) · OAuth2/OIDC misconfiguration.
 
 **Known-CVE coverage.** Recon runs **nuclei** with its full baked template set, so known
 CVEs and misconfigurations are flagged out of the box (e.g. Log4Shell, Spring4Shell,
@@ -267,15 +269,17 @@ Beta — the known gaps still being worked on:
 
 - **White-box mode** — optional source-aware pass (secret scan + SAST) to prioritise
   dynamic testing; also unlocks PR diff-scope.
-- **SSO breadth** — automated sign-in across more IdPs (today: form login, login-page
-  harvest, headed noVNC capture with session reuse, and RFC-6238 TOTP).
+- **SSO breadth** — fully-automated sign-in for more IdPs (interactive capture stays
+  human-in-the-loop by nature). Today: multi-provider detection
+  (Google/Microsoft/Okta/Auth0/GitHub/SAML/OIDC/…), OAuth2/OIDC misconfiguration checks,
+  form login, login-page harvest, headed noVNC capture with session reuse, and RFC-6238 TOTP.
 
 Recently shipped (previously on this list): stateful seeding (register/login, create via
 form/JSON/multipart/GraphQL); the business-logic / scenario engine (mass assignment, workflow
 step-bypass, cross-actor authz, unauth-action checks, race conditions, weak coupons); a
 per-role capability matrix (forced-browsing / vertical privilege escalation); full API abuse
 (JSON-body injection fuzzing, schema-aware missing-auth, undocumented-method exposure);
-GraphQL cross-session IDOR; and SSO session reuse.
+GraphQL cross-session IDOR; SSO session reuse; and multi-provider SSO detection with OAuth2/OIDC misconfiguration checks.
 
 ## Development
 ```bash
