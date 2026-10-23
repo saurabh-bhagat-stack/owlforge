@@ -80,3 +80,33 @@ def test_locked_single_use_is_quiet(tmp_path, monkeypatch):
 def test_race_requires_session():
     from owlforge.engine.raceprobe import race_scan
     assert race_scan("a", _model(), _RedeemApp(racy=True), {}) == 0
+
+
+class _RedeemReceiptApp:
+    """Racy single-use redeem that returns a UNIQUE receipt id on each success, so a burst
+    leaves multiple distinct side effects (confirms the action really ran more than once)."""
+
+    def __init__(self):
+        self.used = 0
+
+    def http_request(self, method, url, *, headers=None, params=None, body=None,
+                     follow_redirects=True, timeout_ms=30000):
+        import secrets as _s
+        if not url.endswith("/coupon/redeem"):
+            return {"status": 404, "headers": {}, "body": ""}
+        seen = self.used
+        time.sleep(0.03)
+        if seen >= 1:
+            return {"status": 409, "headers": {}, "body": "already redeemed"}
+        self.used = seen + 1
+        rid = _s.token_hex(4)
+        return {"status": 200, "headers": {}, "body": f'{{"receipt":"{rid}"}}'}
+
+
+def test_distinct_effects_raise_confidence(tmp_path, monkeypatch):
+    db = _db(tmp_path, monkeypatch)
+    from owlforge.engine.raceprobe import race_scan
+    assert race_scan("a", _model(), _RedeemReceiptApp(), SESS, burst=6) == 1
+    f = _findings(db)
+    assert any(x.confidence == "medium" for x in f)
+    assert any("distinct" in (x.proof_of_concept or "").lower() for x in f)
