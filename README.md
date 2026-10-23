@@ -252,18 +252,16 @@ Beta — the known gaps still being worked on:
 
 - **White-box mode** — optional source-aware pass (secret scan + SAST) to prioritise
   dynamic testing; also unlocks PR diff-scope.
-- **Deeper API abuse** — beyond spec ingestion and JSON mass-assignment (both in place):
-  schema-aware auth, body/variable fuzzing, and more API-specific abuse cases.
-- **Richer role modelling** — a per-role capability matrix and role hierarchy on top of
-  the current owner/peer/anon differential, privileged-role detection, and auto-provisioned
-  second account.
+- **Deeper API abuse** — spec ingestion, JSON mass-assignment and JSON-body injection
+  fuzzing are in place; still to come: schema-aware auth and more API-specific abuse cases.
 - **SSO breadth** — automated sign-in across more IdPs (today: form login, login-page
   harvest, headed noVNC capture with session reuse, and RFC-6238 TOTP).
 
 Recently shipped (previously on this list): the business-logic / scenario engine (mass
-assignment, workflow step-bypass, cross-actor authz, unauth-action checks), the
-race-condition probe, GraphQL cross-session IDOR, logout/session-invalidation confirmation,
-and broader CORS checks.
+assignment, workflow step-bypass, cross-actor authz, unauth-action checks), a per-role
+capability matrix (forced-browsing / vertical privilege escalation), API JSON-body injection
+fuzzing, the race-condition probe, GraphQL cross-session IDOR, logout/session-invalidation
+confirmation, and broader CORS checks.
 
 ## Development
 ```bash
