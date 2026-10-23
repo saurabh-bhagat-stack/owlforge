@@ -184,3 +184,48 @@ def test_register_account_with_unquoted_html():
     ident = register_account(inv, sb, "https://t")
     assert ident is not None and ident["headers"]["Cookie"].startswith("session=uq9")
     assert "example.test" in sb.posted[0][1]
+
+
+# ---- GraphQL mutation seeding -----------------------------------------------------------
+class _GqlApp:
+    """Introspection-on GraphQL endpoint with a scalar-arg createPost mutation."""
+
+    def __init__(self, introspection=True):
+        self.intro = introspection
+
+    def http_request(self, method, url, *, headers=None, params=None, body=None,
+                     follow_redirects=True, timeout_ms=30000):
+        import json as _j
+        q = (_j.loads(body or "{}").get("query", "") if body else "")
+        if "__schema" in q:
+            if not self.intro:
+                return {"status": 200, "headers": {}, "body": '{"errors":[{"message":"off"}]}'}
+            schema = {"data": {"__schema": {"mutationType": {"fields": [
+                {"name": "createPost", "args": [
+                    {"name": "title", "type": {"kind": "NON_NULL", "name": None,
+                     "ofType": {"kind": "SCALAR", "name": "String", "ofType": None}}}]}]}}}}
+            return {"status": 200, "headers": {}, "body": _j.dumps(schema)}
+        if "createPost" in q:
+            return {"status": 200, "headers": {}, "body": '{"data":{"createPost":{"id":"7"}}}'}
+        return {"status": 400, "headers": {}, "body": "{}"}
+
+
+_GQL_INV = [{"url": "https://t/graphql", "method": "POST", "source": "graphql", "params": []}]
+
+
+def test_graphql_seed_creates_and_captures_id():
+    from owlforge.engine.seed import graphql_seed_objects
+    out = graphql_seed_objects(_GQL_INV, _GqlApp(), {"Cookie": "s=1"}, "https://t")
+    assert len(out) == 1
+    assert out[0]["object_id"] == "7" and out[0]["source"] == "seeded-graphql"
+    assert out[0]["graphql"] == "mutation createPost"
+
+
+def test_graphql_seed_quiet_without_introspection():
+    from owlforge.engine.seed import graphql_seed_objects
+    assert graphql_seed_objects(_GQL_INV, _GqlApp(introspection=False), {"Cookie": "s=1"}, "https://t") == []
+
+
+def test_graphql_seed_requires_session():
+    from owlforge.engine.seed import graphql_seed_objects
+    assert graphql_seed_objects(_GQL_INV, _GqlApp(), {}, "https://t") == []

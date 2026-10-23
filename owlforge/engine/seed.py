@@ -325,3 +325,104 @@ def _id_from_json(body: str, base: str) -> str | None:
 
 def _looks_like_object(url: str) -> bool:
     return bool(re.search(r"/(?:\d+|[0-9a-f]{8}-)", url or "")) or "id=" in (url or "")
+
+
+# ---- GraphQL mutation seeding -----------------------------------------------------------
+_GQL_PATHS = ("/graphql", "/graphql/", "/api/graphql", "/v1/graphql", "/query", "/gql")
+_GQL_CREATE = ("create", "add", "new", "register", "post", "insert", "signup", "save", "submit")
+_GQL_SCALARS = ("String", "Int", "Float", "Boolean", "ID")
+_INTROSPECT_MUT = ("query{__schema{mutationType{fields{name args{name type{kind name "
+                   "ofType{kind name ofType{kind name}}}}}}}}")
+
+
+def _gql_post(sandbox, url, query, headers):
+    try:
+        h = dict(headers or {})
+        h["Content-Type"] = "application/json"
+        return sandbox.http_request("POST", url, body=json.dumps({"query": query}), headers=h) or {}
+    except Exception:
+        return {}
+
+
+def _gql_endpoints(inventory, target):
+    eps = [it["url"] for it in inventory or [] if it.get("source") == "graphql" and it.get("url")]
+    eps = list(dict.fromkeys(eps))
+    if eps:
+        return eps
+    from urllib.parse import urlsplit, urlunsplit
+    if not target:
+        return []
+    b = urlsplit(target)
+    return [urlunsplit((b.scheme, b.netloc, pth, "", "")) for pth in _GQL_PATHS]
+
+
+def _gql_base_type(t: dict):
+    while t and t.get("ofType"):
+        t = t["ofType"]
+    return t or {}
+
+
+def _gql_literal(scalar: str, marker: str) -> str:
+    if scalar in ("Int", "Float"):
+        return "1"
+    if scalar == "Boolean":
+        return "false"
+    return json.dumps(f"owlforge test {marker}" if scalar != "ID" else marker)
+
+
+def graphql_seed_objects(inventory, sandbox, session_headers, target,
+                         log: Callable[[str], None] = lambda m: None, cap: int = 3) -> list[dict]:
+    """If a GraphQL endpoint exposes introspection, create an object via a create-ish mutation
+    whose required args are all scalars, and capture the returned id. Returns seeded items.
+
+    Note: GraphQL objects have no per-object REST URL, so these feed the app model and the
+    GraphQL / business-logic specialists rather than the REST access-control passes."""
+    if sandbox is None or not session_headers:
+        return []
+    out: list[dict] = []
+    for url in _gql_endpoints(inventory, target)[:3]:
+        intro = _gql_post(sandbox, url, _INTROSPECT_MUT, session_headers)
+        body = intro.get("body", "") or ""
+        if "mutationType" not in body:
+            continue
+        try:
+            mt = json.loads(body).get("data", {}).get("__schema", {}).get("mutationType") or {}
+        except Exception:
+            continue
+        for f in (mt.get("fields") or []):
+            name = f.get("name", "")
+            if not any(h in name.lower() for h in _GQL_CREATE):
+                continue
+            marker = _marker()
+            arglits, ok = [], True
+            for a in (f.get("args") or []):
+                base = _gql_base_type(a.get("type") or {})
+                scalar = base.get("name")
+                required = (a.get("type") or {}).get("kind") == "NON_NULL"
+                if scalar in _GQL_SCALARS:
+                    arglits.append(f'{a["name"]}:{_gql_literal(scalar, marker)}')
+                elif required:
+                    ok = False
+                    break
+            if not ok:
+                continue
+            argstr = ("(" + ", ".join(arglits) + ")") if arglits else ""
+            for sel in ("{id}", "{id __typename}", "{__typename}"):
+                r = _gql_post(sandbox, url, f"mutation{{{name}{argstr}{sel}}}", session_headers)
+                rb = r.get("body", "") or ""
+                try:
+                    data = json.loads(rb).get("data") or {}
+                except Exception:
+                    data = {}
+                node = data.get(name) if isinstance(data, dict) else None
+                if node is not None:
+                    rid = node.get("id") if isinstance(node, dict) else None
+                    out.append({"url": url, "method": "POST", "params": [], "source": "seeded-graphql",
+                                "marker": marker, "graphql": f"mutation {name}", "object_id": rid})
+                    log(f"seed: created a GraphQL object via {name}() (id={rid})")
+                    break
+            if len(out) >= cap:
+                break
+        if len(out) >= cap:
+            break
+    return out

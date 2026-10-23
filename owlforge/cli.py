@@ -618,7 +618,7 @@ def run(
     try:
         from owlforge.engine.orchestrator import read_blackboard as _rbb
         from owlforge.engine.recon import persist_new as _pn
-        from owlforge.engine.seed import register_account, seed_objects
+        from owlforge.engine.seed import graphql_seed_objects, register_account, seed_objects
         _inv = _rbb(aid)
         _slog = lambda m: console.print(rf"[dim]\[seed] {m}[/]")  # noqa: E731
         if identity_set is None and session_headers:
@@ -631,6 +631,9 @@ def run(
             _pn(aid, _seeded, cap=400)
             console.print(f"[dim]\\[seed] created {len(_seeded)} test object(s) for "
                           "access-control testing[/]")
+        _gseeded = graphql_seed_objects(_inv, sandbox_client, session_headers, target, log=_slog)
+        if _gseeded:
+            console.print(f"[dim]\\[seed] created {len(_gseeded)} GraphQL object(s)[/]")
     except Exception as e:
         console.print(f"[yellow]seed step skipped: {type(e).__name__}: {e}[/]")
 
