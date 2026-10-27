@@ -158,6 +158,21 @@ class SandboxClient:
         r.raise_for_status()
         return r.json()
 
+    def browser_login(self, url: str, username: str, password: str, *,
+                      user_field: str | None = None, pass_field: str | None = None,
+                      headers: dict | None = None, check_url: str | None = None,
+                      success: str | None = None, timeout_ms: int = 30_000) -> dict:
+        """Headless browser form login (fill user/pass + submit) returning the captured
+        storage_state. Handles SPA/JS logins a raw form POST cannot."""
+        r = httpx.post(
+            f"{self.base_url}/login", headers=self._headers(),
+            json={"url": url, "username": username, "password": password,
+                  "user_field": user_field, "pass_field": pass_field, "headers": headers,
+                  "check_url": check_url, "success": success, "timeout_ms": timeout_ms},
+            timeout=max(self.timeout, timeout_ms / 1000 + 25))
+        r.raise_for_status()
+        return r.json()
+
     def sso_start(self, url: str, *, headers: dict | None = None) -> dict:
         """Start an interactive SSO capture (headed Chromium behind noVNC)."""
         r = httpx.post(f"{self.base_url}/sso/start", headers=self._headers(),

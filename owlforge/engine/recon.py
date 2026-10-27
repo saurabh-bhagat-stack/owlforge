@@ -536,6 +536,7 @@ def run_recon(
     network_recon_enabled: bool = False,
     browser_recon_enabled: bool = False,
     scope=None,
+    client=None,
     log: Callable[[str], None] = lambda m: None,
 ) -> tuple[str, dict, str]:
     """Unified recon pipeline. ALWAYS runs unauthenticated recon first, then
@@ -601,6 +602,35 @@ def run_recon(
         if _lh:
             session_headers = _lh
             auth_summary = f"authenticated (login-page creds: {_lp})"
+    if not session_headers and client is not None and sandbox_client is not None:
+        # label-free: render the login page, let the model read ANY displayed credentials
+        # (no 'username:'/'password:' labels needed), then log in through the real browser
+        from owlforge.engine.browserlogin import (
+            browser_login_session,
+            extract_displayed_credentials,
+        )
+        _b = target.rstrip("/")
+        for _lp in ("/login", "/signin", "/sign-in", "/account/login", "/users/login",
+                    "/auth/login", "/"):
+            _lu = _b + _lp
+            try:
+                _page = sandbox_client.render(_lu, headers=None) or {}
+            except Exception:
+                _page = {}
+            _txt = _page.get("html") or ""
+            if "<form" not in _txt.lower() and "password" not in _txt.lower():
+                continue
+            for _c in extract_displayed_credentials(client, _txt, log=log):
+                _bh, _ = browser_login_session(sandbox_client, _lu, _c["username"],
+                                               _c["password"], target,
+                                               check_url=_b + "/my-account", log=log)
+                if _bh:
+                    session_headers = _bh
+                    auth_summary = "authenticated (model-read displayed creds, browser login)"
+                    log(f"auth: logged in as '{_c['username']}' using credentials shown on {_lp}")
+                    break
+            if session_headers:
+                break
 
     inv = unauth_inv
     # pass 2: authenticated (only if a session was resolved)

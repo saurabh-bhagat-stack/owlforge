@@ -127,6 +127,17 @@ def establish_from_login_page(target: str, sandbox, request_fn: RequestFn,
         if not (creds.get("username") and creds.get("password")):
             continue
 
+        # prefer a REAL browser login (SPA/JS-aware, captures cookies + localStorage token);
+        # fall back to the raw form POST below if the browser path is unavailable or fails
+        from owlforge.engine.browserlogin import browser_login_session
+        _bh, _ = browser_login_session(
+            sandbox, lu, creds["username"], creds["password"], base,
+            user_field=form.get("user_field"), pass_field=form.get("pass_field"),
+            check_url=urljoin(lu, "/my-account"), log=log)
+        if _bh:
+            log(f"browser-logged-in with harvested credentials ({creds['username']}:***) via {path}")
+            return _bh, f"{creds['username']} from {path} (browser)"
+
         tok = extract_token(html)
         params = {(form.get("user_field") or "username"): creds["username"],
                   (form.get("pass_field") or "password"): creds["password"]}

@@ -626,7 +626,7 @@ def run(
         surface_text, session_headers, auth_summary = run_recon(
             aid, target, sandbox_client, user_auth=user_auth, max_pages=recon_pages,
             network_recon_enabled=network_recon, browser_recon_enabled=True,
-            scope=scope,
+            scope=scope, client=client,
             log=lambda m: console.print(rf"[dim]\[recon] {m}[/]"))
         console.print(rf"[dim]\[auth] {auth_summary}[/]")
         try:
@@ -811,7 +811,7 @@ def resume(assessment_id: str) -> None:
     try:
         _st, session_headers, auth_summary = run_recon(
             aid, target, sandbox_client, user_auth=AuthContext(mode="unauth"),
-            max_pages=40, browser_recon_enabled=True, scope=scope,
+            max_pages=40, browser_recon_enabled=True, scope=scope, client=client,
             log=lambda m: console.print(rf"[dim]\[recon] {m}[/]"))
     except Exception as e:
         console.print(f"[yellow]recon failed: {e}[/]")

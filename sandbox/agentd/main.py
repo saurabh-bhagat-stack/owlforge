@@ -451,6 +451,117 @@ async def interact(req: InteractRequest) -> dict:
     return {"submitted": filled > 0, "filled": filled, "executed": executed, "via": via}
 
 
+class LoginRequest(BaseModel):
+    url: str
+    username: str
+    password: str
+    user_field: str | None = None
+    pass_field: str | None = None
+    headers: dict[str, str] | None = None
+    check_url: str | None = None
+    success: str | None = None
+    wait_until: str = "networkidle"
+    timeout_ms: int = 30_000
+
+
+@app.post("/login", dependencies=[Depends(auth)])
+async def login(req: LoginRequest) -> dict:
+    """Headless browser form login: navigate, fill the username/password fields (given
+    selectors or auto-detected), submit, handle a two-step (username -> password) flow, and
+    capture the authenticated storage_state (cookies + localStorage) for reuse. This is how a
+    real SPA login — JS-driven XHR, client-side hashing, token in localStorage — is performed,
+    rather than replaying a raw form POST."""
+    try:
+        from playwright.async_api import async_playwright
+    except Exception as e:
+        return {"error": f"playwright unavailable: {e}"}
+
+    _USER_SELS = ['input[type=email]', 'input[autocomplete=username]',
+                  'input[name*="user" i]', 'input[name*="email" i]', 'input[id*="user" i]',
+                  'input[id*="email" i]', 'input[type=text]', 'input:not([type])']
+    _PASS_SELS = ['input[type=password]', 'input[name*="pass" i]', 'input[id*="pass" i]']
+
+    try:
+        async with async_playwright() as pw:
+            browser = await pw.chromium.launch(args=["--no-sandbox", "--disable-dev-shm-usage"])
+            context = await browser.new_context(extra_http_headers=req.headers or {},
+                                                ignore_https_errors=True)
+            page = await context.new_page()
+            await page.goto(req.url, wait_until=req.wait_until, timeout=req.timeout_ms)
+
+            async def _fill(value, explicit, sels):
+                order = ([f'input[name="{explicit}"]', f'input[id="{explicit}"]'] if explicit else []) + sels
+                for sel in order:
+                    try:
+                        el = await page.query_selector(sel)
+                    except Exception:
+                        el = None
+                    if el:
+                        try:
+                            await el.fill(value)
+                            return True
+                        except Exception:
+                            pass
+                return False
+
+            async def _submit():
+                btn = (await page.query_selector("button[type=submit]")
+                       or await page.query_selector("input[type=submit]")
+                       or await page.query_selector("button"))
+                if btn:
+                    try:
+                        await btn.click(timeout=5000)
+                        return
+                    except Exception:
+                        pass
+                try:
+                    await page.keyboard.press("Enter")
+                except Exception:
+                    pass
+
+            async def _settle():
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=8000)
+                except Exception:
+                    pass
+                await page.wait_for_timeout(600)
+
+            await _fill(req.username, req.user_field, _USER_SELS)
+            had_pass = await _fill(req.password, req.pass_field, _PASS_SELS)
+            await _submit()
+            await _settle()
+            if not had_pass:                       # two-step: password page appears after username
+                if await _fill(req.password, req.pass_field, _PASS_SELS):
+                    await _submit()
+                    await _settle()
+
+            final_url = page.url
+            if req.check_url:
+                try:
+                    await page.goto(req.check_url, wait_until=req.wait_until, timeout=req.timeout_ms)
+                    await page.wait_for_timeout(400)
+                except Exception:
+                    pass
+            try:
+                body = (await page.content())[:MAX_OUTPUT]
+            except Exception:
+                body = ""
+            try:
+                state = await context.storage_state()
+            except Exception as e:
+                state = {"error": f"storage_state failed: {type(e).__name__}: {e}"}
+            await browser.close()
+
+            low = body.lower()
+            hint = ("logout" in low or "log out" in low or "sign out" in low
+                    or (req.username and req.username.lower() in low))
+            success = (req.success.lower() in low) if req.success else None
+            return {"storage_state": state, "final_url": final_url,
+                    "logged_in_hint": bool(hint), "success": success}
+    except Exception as e:
+        return {"error": f"{type(e).__name__}: {e}"}
+
+
 
 class MapRequest(BaseModel):
     url: str
