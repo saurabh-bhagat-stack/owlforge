@@ -432,9 +432,9 @@ def run(
         False, "--network-recon",
         help="Also run port/service discovery (nmap) — opt-in (broader authorization)."),
     dashboard_ui: bool = typer.Option(
-        False, "--dashboard", "-D",
-        help="Live full-screen dashboard (snapshot view). Default: the scrollable "
-             "streaming log, which you can scroll in your terminal."),
+        True, "--dashboard/--no-dashboard", "-D",
+        help="Live full-screen interactive dashboard — the DEFAULT on a terminal. Use "
+             "--no-dashboard for the plain scrollable streaming log (and -n for headless CI)."),
     fail_on: str = typer.Option(
         None, "--fail-on",
         help="CI gate: exit non-zero (2) if any VALIDATED finding is at or above this "

@@ -25,7 +25,7 @@ container you build yourself.
 
 ## Demo
 
-A live run in the interactive dashboard (`-D`). A **narrative activity feed** tells the
+A live run in the interactive dashboard (the **default** on a terminal). A **narrative activity feed** tells the
 story of the scan (what it's testing and why, the decisive probes, every confirmed
 finding — the agent's own reasoning shown dim and tagged `thinking`, never as fact), with
 live findings, a **current-target** card, the **discovered surface**, and a **steer** box
@@ -39,7 +39,7 @@ to nudge the running scan:
 > test app. Keys: ↑↓ navigate · enter/click details · `/` filter · `s` sort · `v` severity ·
 > steer box always at the bottom · `L` raw log · `Ctrl+Q` quit._
 
-Prefer plain output? Omit `-D` for a scrollable streaming log (and `-n` for headless CI).
+Prefer plain output? `--no-dashboard` gives a scrollable streaming log (and `-n` for headless CI).
 
 ## Why local-first
 owlforge is built to be driven by a **local** model (any OpenAI-compatible endpoint —
@@ -213,11 +213,13 @@ owlforge run ./openapi.yaml            # or an OpenAPI/Swagger spec (json/yaml)
 owlforge run ./postman_collection.json # or a Postman v2.x collection
 ```
 
-Watch it live in an **interactive dashboard** — a narrative activity feed, live findings
-(filter/sort/drill-in), the current target, the discovered surface, and a steer box to
-guide the scan as it runs:
+By default (on a terminal) it runs in an **interactive dashboard** — a narrative activity
+feed, live findings (filter/sort/drill-in), the current target, the discovered surface, and
+a steer box to guide the scan as it runs. No flag needed:
 ```bash
-owlforge run app.example -D
+owlforge run app.example                 # interactive dashboard (default)
+owlforge run app.example --no-dashboard  # plain scrollable streaming log instead
+owlforge run app.example -n              # headless (CI): plain output, exit codes
 ```
 Add `-m` only to steer it — scope, credentials, focus areas, constraints. This is the
 operator's highest-priority guidance and it reaches the specialists:
