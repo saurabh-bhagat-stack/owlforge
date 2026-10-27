@@ -3,6 +3,36 @@
 All notable changes to owlforge are recorded here. This project adheres to
 [Semantic Versioning](https://semver.org/).
 
+## [0.1.1] — 2026-10-28
+
+Authenticated- and business-logic-focused release: owlforge now behaves like a tester —
+seeding its own data, reasoning over an app model, and logging in through the real browser.
+
+### Added
+- **Stateful seeding:** registers throwaway accounts (two-step register->login), creates
+  test objects via HTML forms, JSON APIs, multipart uploads and GraphQL mutations, and
+  captures the returned ids for authenticated/business-logic testing. Auto-provisions a
+  second account for A-vs-B access-control testing.
+- **Business-logic / scenario engine:** builds an app model (entities/roles/workflows) and
+  checks mass assignment & privilege escalation (sign-up and objects), client-controlled
+  ownership, cross-actor edit/delete, a per-role capability matrix (forced-browsing /
+  vertical privesc), workflow step-bypass, unauthenticated privileged actions, race
+  conditions, and weak coupon validation.
+- **Full API abuse:** JSON request-body injection fuzzing, schema-aware missing-auth, and
+  undocumented-method exposure (OPTIONS), on OpenAPI/Swagger/Postman surfaces.
+- **GraphQL:** mutation-based object seeding + cross-session IDOR/BOLA.
+- **SSO breadth:** multi-provider detection (Google/Microsoft/Okta/Auth0/GitHub/SAML/OIDC/…)
+  and OAuth2/OIDC misconfiguration checks (missing `state`, implicit flow); captured SSO
+  sessions are reused across runs.
+- **Browser-driven login:** owlforge now logs in through real Chromium (fill + submit +
+  capture storage_state), handling SPA/JS logins and two-step flows; the model reads
+  credentials a page DISPLAYS in any format (label-free) and owlforge logs in with them and
+  verifies.
+
+### Changed
+- Report classifier recognises the new finding types; tolerant HTML form-attribute parsing
+  (single/unquoted attrs) and DOM-level form extraction for JS-rendered pages.
+
 ## [0.1.0] — unreleased
 
 First tagged release. The engine runs end to end on real targets with evidence-gated,
