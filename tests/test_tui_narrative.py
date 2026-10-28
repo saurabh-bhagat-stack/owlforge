@@ -78,3 +78,14 @@ def test_steer_input_is_persistent(tmp_path, monkeypatch):
             assert app.drain_steer() == ["focus on /api"]
 
     asyncio.run(_run())
+
+
+def test_recon_phase_status_is_shown_but_turn_counter_is_not():
+    from owlforge.engine.tui import narrate
+    # recon / seed / auth / nuclei phase lines now appear in the activity feed
+    assert narrate("status", "recon: crawled 8 page(s), 11 surface item(s)") is not None
+    assert narrate("status", "seed: created 2 test object(s)") is not None
+    assert narrate("status", "auth: authenticated (login-page creds: carlos)") is not None
+    assert narrate("status", "nuclei: 0 match(es)") is not None
+    # the per-turn counter stays in the status bar, not the feed
+    assert narrate("status", "turn 7/20") is None

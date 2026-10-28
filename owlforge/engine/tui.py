@@ -116,7 +116,10 @@ def narrate(type_: str, message: str) -> Text | None:
         ):
             if key in low:
                 return _line(f"{label}  ", "cyan", m.split(key, 1)[-1].strip() or m, st)
-        return None
+        if re.search(r"turn \d+/\d+", low):
+            return None   # the turn counter lives in the status bar, not the feed
+        # surface any other phase status (recon / auth / seed / nuclei / spec / scenario / …)
+        return _line("  ·  ", "dim", m[:160], "dim")
     if type_ == "log" and ("[reauth]" in low or "blocked duplicate" in low):
         return _line("  note  ", "dim", m, "dim")
     return None
