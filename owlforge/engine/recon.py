@@ -598,7 +598,7 @@ def run_recon(
         auth_summary = f"authenticated (auto-escalated: {prov})"
     if not session_headers:
         from owlforge.engine.credpage import establish_from_login_page
-        _lh, _lp = establish_from_login_page(target, sandbox_client, _reqfn, log=log)
+        _lh, _lp = establish_from_login_page(assessment_id, target, sandbox_client, _reqfn, log=log)
         if _lh:
             session_headers = _lh
             auth_summary = f"authenticated (login-page creds: {_lp})"
@@ -626,6 +626,8 @@ def run_recon(
                                                check_url=_b + "/my-account", log=log)
                 if _bh:
                     session_headers = _bh
+                    from owlforge.engine.credpage import _file_exposed_credentials
+                    _file_exposed_credentials(assessment_id, _lu, _c)
                     auth_summary = "authenticated (model-read displayed creds, browser login)"
                     log(f"auth: logged in as '{_c['username']}' using credentials shown on {_lp}")
                     break

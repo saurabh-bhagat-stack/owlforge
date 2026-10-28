@@ -65,7 +65,45 @@ def _parse_cookie(resp: dict) -> str:
     return _parse_set_cookie(hdrs.get("set-cookie", ""))
 
 
-def establish_from_login_page(target: str, sandbox, request_fn: RequestFn,
+def _file_exposed_credentials(assessment_id: str, url: str, creds: dict) -> None:
+    """Credentials DISPLAYED on the page that owlforge then logged in with = a real, validated
+    information-disclosure finding (not just a convenience for the scan). Values are reported
+    in full as the proof, per policy."""
+    if not assessment_id:
+        return
+    import secrets as _sec
+
+    from owlforge.store.db import session
+    from owlforge.store.models import Finding
+    u, pw = creds.get("username", ""), creds.get("password", "")
+    if not (u and pw):
+        return
+    try:
+      with session() as s:
+        s.add(Finding(
+            id=f"find_{_sec.token_hex(5)}", assessment_id=assessment_id,
+            title="Valid login credentials exposed in client-side content",
+            severity="high", status="validated", confidence="high",
+            endpoint=url, method="GET",
+            technical_analysis=(
+                f"The login flow at {url} DISPLAYS working credentials to any anonymous visitor "
+                f"(username '{u}', password '{pw}'). owlforge read them straight off the page and "
+                "authenticated successfully, so these are live credentials leaked in client-served "
+                "content — not a placeholder."),
+            proof_of_concept=(f"credentials shown on the page: {u} / {pw} -> submitted -> "
+                              "logged in (session established)"),
+            impact="Anyone who views the page can log in as this user; if it is a privileged or "
+                   "shared account, it exposes that user's data and actions.",
+            remediation="Never render real/working credentials in HTML, JavaScript, comments or "
+                        "test fixtures served to clients. Remove them and rotate the account.",
+            evidence=f"{u}:{pw}",
+            validation_note="credentials read from the page and confirmed by a successful login"))
+        s.commit()
+    except Exception:
+        pass   # a reporting hiccup must never break authentication
+
+
+def establish_from_login_page(assessment_id: str, target: str, sandbox, request_fn: RequestFn,
                               log: Callable[[str], None] = lambda m: None) -> tuple[dict, str]:
     """Find a login page, harvest shown credentials (following a multi-step username->
     password flow), log in, and return (session_headers, provenance). Cookie-aware: a
@@ -136,6 +174,7 @@ def establish_from_login_page(target: str, sandbox, request_fn: RequestFn,
             check_url=urljoin(lu, "/my-account"), log=log)
         if _bh:
             log(f"browser-logged-in with harvested credentials ({creds['username']}:***) via {path}")
+            _file_exposed_credentials(assessment_id, lu, creds)
             return _bh, f"{creds['username']} from {path} (browser)"
 
         tok = extract_token(html)
@@ -152,6 +191,7 @@ def establish_from_login_page(target: str, sandbox, request_fn: RequestFn,
         body = (check.get("body") or "").lower()
         if "log out" in body or "logout" in body or creds["username"].lower() in body:
             log(f"harvested login-page credentials ({creds['username']}:***) and logged in via {path}")
+            _file_exposed_credentials(assessment_id, lu, creds)
             return {"Cookie": cookie_hdr}, f"{creds['username']} from {path}"
     return {}, ""
 
