@@ -351,15 +351,31 @@ def _class_hint(title: str) -> str:
     return "other"
 
 
+_PAYLOAD_SIG = ("'", '"', "<", ">", "{{", "../", "..\\", ";", "|", "`", "${", "$(",
+                "%27", " or ", "1=1", "sleep(", "union", "onerror", "waitfor")
+
+
+def _payload_param(params) -> tuple:
+    """The param that actually carries the injection (its value looks like a payload), so two
+    findings for the SAME injected param merge even when one also recorded context params
+    (e.g. {category} vs {category, searchTerm}). Falls back to the full key set."""
+    if not params:
+        return ()
+    hits = [k for k, v in params.items() if any(sig in str(v).lower() for sig in _PAYLOAD_SIG)]
+    if hits:
+        return (sorted(hits)[0],)
+    return tuple(sorted(params.keys()))
+
+
 def _dupe_key(title, endpoint, method, params):
     """Identity used to recognise two findings as the same issue (class + endpoint +
-    method + param set). Shared by dedupe and by the validation pre-check so a candidate
+    method + injected param). Shared by dedupe and by the validation pre-check so a candidate
     that merely restates an already-validated deterministic finding is collapsed, not
     re-probed and rejected."""
     hint = _class_hint(title)
     title_key = (title or "").strip().lower() if hint == "other" else ""
-    return (hint, (endpoint or "").rstrip("/"), (method or "GET").upper(),
-            tuple(sorted((params or {}).keys())), title_key)
+    pkey = _payload_param(params) if hint != "other" else tuple(sorted((params or {}).keys()))
+    return (hint, (endpoint or "").rstrip("/"), (method or "GET").upper(), pkey, title_key)
 
 
 _STATUS_RANK = {"validated": 3, "candidate": 2, "false_positive": 1, "duplicate": 0}

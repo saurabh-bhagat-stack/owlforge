@@ -486,7 +486,7 @@ def run(
 
     # deep-by-default: everything thorough, no knobs to dumb it down
     recon_pages = 40
-    max_turns = 30
+    max_turns = cfg.runner.max_turns   # honor [runner] max_turns (default 40)
 
     # auto project name: <host>-<shorthash>, filesystem-safe. The assessment id IS this
     # name, so the on-disk folder ~/.owlforge/assessments/<project>/ is self-describing.
