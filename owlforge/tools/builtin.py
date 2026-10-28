@@ -7,9 +7,20 @@ never touch a shell. exec_command remains for non-HTTP tools (nmap, dig, etc.).
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from owlforge.tools.base import Tool, ToolContext, ToolRegistry
+
+
+def _as_evidence(v) -> str:
+    """Normalise create_finding evidence to a string. The whole report path consumes
+    `evidence` as text; the agent may hand us a list of strings/dicts, so flatten it."""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, (list, tuple)):
+        return "\n".join(x if isinstance(x, str) else json.dumps(x, default=str) for x in v)
+    return str(v or "")
 
 
 async def _think(args: dict[str, Any], ctx: ToolContext) -> str:
@@ -220,7 +231,7 @@ async def _create_finding(args: dict[str, Any], ctx: ToolContext) -> str:
         repro_params=dict(args.get("repro_params", {}) or {}),
         repro_body=str(args.get("repro_body", "")),
         success_signal=str(args.get("success_signal", "")),
-        evidence=list(args.get("evidence", []) or []),
+        evidence=_as_evidence(args.get("evidence", [])),
         status="candidate",
         filed_by_agent_id=ctx.agent_id if hasattr(ctx, "agent_id") else None,
     )

@@ -175,6 +175,15 @@ def _pretty_status(m: str, low: str) -> tuple[str, str, str, str] | None:
         return ("graphql-idor  ", "cyan", after("graphql-idor:"), "white")
     if low.startswith("graphql:"):
         return ("graphql  ", "cyan", after("graphql:"), "white")
+    if low.startswith("sqli-extract:"):
+        return ("sqli 💰 ", "bold green", "pulled a live value straight out of the database "
+                "— " + after("sqli-extract:"), "white")
+    if low.startswith("reflect-xss:"):
+        r = after("reflect-xss:")
+        if "EXECUTED" in r:
+            return ("xss 💥 ", "bold green", "crafted a context-aware payload that EXECUTED "
+                    "in the browser — " + r, "white")
+        return ("reflect-xss  ", "cyan", "found input reflected un-escaped — " + r, "white")
     if low.startswith("sqlmap:"):
         return ("sqlmap  ", "cyan", after("sqlmap:"), "white")
 

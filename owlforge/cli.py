@@ -291,6 +291,12 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
         from owlforge.engine.storedbrowser import browser_stored_scan
         browser_stored_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                             log=lambda m: emit("status", m))
+        from owlforge.engine.reflectxss import reflected_xss_scan
+        _xss_targets = [{"url": it["url"], "param": _p,
+                         "method": (it.get("method") or "GET")}
+                        for it in read_blackboard(aid) for _p in (it.get("params") or [])]
+        reflected_xss_scan(aid, _xss_targets, sandbox_client, session_headers,
+                           log=lambda m: emit("status", m))
         from owlforge.engine.wsprobe import ws_scan
         ws_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                 log=lambda m: emit("status", m))
@@ -302,6 +308,9 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
         from owlforge.engine.blindsqli import time_based_sqli_scan
         time_based_sqli_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                              log=lambda m: emit("status", m))
+        from owlforge.engine.sqliextract import extract_sqli_values
+        extract_sqli_values(aid, sandbox_client, session_headers,
+                            log=lambda m: emit("status", m))
         from owlforge.engine.sqlmapconfirm import sqlmap_confirm
         sqlmap_confirm(aid, sandbox_client, session_headers,
                        log=lambda m: emit("status", m))
