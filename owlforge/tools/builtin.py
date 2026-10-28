@@ -43,6 +43,55 @@ def _normalize_params(params):
     return out
 
 
+_CSRF_HINT = ("csrf", "xsrf", "anti-forgery", "antiforgery", "forbidden (csrf")
+
+
+def _is_csrf_block(d: dict) -> bool:
+    """A state-changing request that failed purely because an anti-CSRF token was missing/stale."""
+    if int(d.get("status") or 0) not in (400, 403, 419):
+        return False
+    b = str(d.get("body") or "").lower()
+    return any(h in b for h in _CSRF_HINT)
+
+
+async def _retry_with_csrf(ctx, method, url, headers, params, body):
+    """Fetch a fresh CSRF token from the form page (carrying the session cookie it sets) and
+    re-issue the request once with the token attached. Returns the new response or None."""
+    import asyncio
+
+    from owlforge.engine.csrf import extract_token
+    page = await asyncio.to_thread(ctx.sandbox.http_request, "GET", url,
+                                   headers=headers, params=None, body=None) or {}
+    tok = extract_token(page.get("body", "") or "")
+    if not tok:
+        return None
+    name, value = tok[0], tok[1]
+    retry_headers = dict(headers or {})
+    jar = []
+    for sc in (page.get("set_cookie") or []):
+        head = sc.split(";", 1)[0].strip()
+        if "=" in head:
+            jar.append(head)
+    if jar:                                   # token is usually bound to a session cookie
+        existing = retry_headers.get("Cookie", "")
+        retry_headers["Cookie"] = "; ".join([x for x in [existing] if x] + jar)
+    new_params, new_body = params, body
+    if isinstance(body, str) and body and not body.lstrip().startswith("{"):
+        new_body = body + ("&" if body else "") + f"{name}={value}"
+    elif isinstance(params, dict):
+        new_params = {**params, name: value}
+    else:
+        new_body = f"{name}={value}"
+    if new_body is not None and not any(k.lower() == "content-type" for k in retry_headers):
+        retry_headers["Content-Type"] = "application/x-www-form-urlencoded"
+    d2 = await asyncio.to_thread(ctx.sandbox.http_request, method, url,
+                                 headers=retry_headers, params=new_params, body=new_body) or {}
+    if d2 and not _is_csrf_block(d2) and not d2.get("error"):
+        ctx.emit("tool_result", "auto-CSRF → fetched a token and retried the request")
+        return d2
+    return None
+
+
 async def _http_request(args: dict[str, Any], ctx: ToolContext) -> str:
     method = str(args.get("method", "GET")).upper()
     url = str(args.get("url", "")).strip()
@@ -75,6 +124,13 @@ async def _http_request(args: dict[str, Any], ctx: ToolContext) -> str:
             return f"error: {type(e).__name__}: {e}"
     if "error" in d:
         return f"error: {d['error']}"
+    if method in ("POST", "PUT", "PATCH", "DELETE") and ctx.sandbox is not None and _is_csrf_block(d):
+        try:
+            _d2 = await _retry_with_csrf(ctx, method, url, headers, params, body)
+            if _d2 is not None:
+                d = _d2
+        except Exception:
+            pass
     try:
         from owlforge.engine.ledger import record_attempt
         record_attempt(ctx.assessment_id, url, method, args.get("params") or None, d.get("status"))
