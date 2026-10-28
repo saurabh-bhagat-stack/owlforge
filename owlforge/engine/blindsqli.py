@@ -91,3 +91,64 @@ def time_based_sqli_scan(assessment_id, inventory, sandbox, session_headers,
     if filed:
         log(f"blind-sqli: {filed} time-based SQL injection(s) confirmed")
     return filed
+
+
+def _bsig(r: dict) -> tuple[int, int]:
+    """Coarse, stable response signature for the boolean oracle (status + length bucket)."""
+    return int(r.get("status") or 0), len(r.get("body") or "") // 32
+
+
+# (TRUE, FALSE) condition pairs for the string and numeric contexts
+_BOOL_PAIRS = (
+    ("1' AND '1'='1", "1' AND '1'='2"),
+    ("1 AND 1=1", "1 AND 1=2"),
+)
+
+
+def _file_boolean(assessment_id, url, method, param, true_pl, false_pl):
+    from owlforge.store.db import session
+    from owlforge.store.models import Finding
+    with session() as s:
+        s.add(Finding(
+            id=f"find_{_secrets.token_hex(5)}", assessment_id=assessment_id,
+            title=f"Blind SQL injection (boolean-based) via '{param}'",
+            severity="high", status="validated", confidence="high",
+            endpoint=url, method=method, repro_url=url, repro_method=method,
+            repro_params={param: "1"},
+            technical_analysis=(f"A TRUE condition ({true_pl}) returned the baseline response while "
+                                f"a FALSE condition ({false_pl}) returned a clearly different one, "
+                                f"confirmed on a repeat — '{param}' ({method} {url}) is SQL-injectable "
+                                "even though it does not emit an error."),
+            proof_of_concept=f"{param}={true_pl!r} (true) vs {param}={false_pl!r} (false) -> responses differ (x2)",
+            impact="Full read (and often write) access to the backend database.",
+            remediation="Use parameterized queries / prepared statements; never concatenate input into SQL.",
+            validation_note="boolean-based blind SQLi, double-confirmed (deterministic)"))
+        s.commit()
+
+
+def boolean_based_sqli_scan(assessment_id, inventory, sandbox, session_headers,
+                            log: Callable[[str], None] = lambda m: None) -> int:
+    """Confirm boolean-based blind SQLi deterministically: a TRUE condition matches the valid
+    baseline while a FALSE one differs (double-checked to reject dynamic-content flapping).
+    Catches injectable params that never 500 — the case the pre-probe otherwise only hints at."""
+    if sandbox is None:
+        return 0
+    from owlforge.engine.preprobe import _send
+    targets = _sqli_params(inventory)[:8]
+    filed = 0
+    for t in targets:
+        base = _bsig(_send(sandbox, t["method"], t["url"], t["param"], "1", session_headers) or {})
+        for true_pl, false_pl in _BOOL_PAIRS:
+            rt = _bsig(_send(sandbox, t["method"], t["url"], t["param"], true_pl, session_headers) or {})
+            rf = _bsig(_send(sandbox, t["method"], t["url"], t["param"], false_pl, session_headers) or {})
+            if rt != base or rf == rt:
+                continue
+            rt2 = _bsig(_send(sandbox, t["method"], t["url"], t["param"], true_pl, session_headers) or {})
+            rf2 = _bsig(_send(sandbox, t["method"], t["url"], t["param"], false_pl, session_headers) or {})
+            if rt2 == rt and rf2 == rf:   # stable across a repeat -> not jitter
+                _file_boolean(assessment_id, t["url"], t["method"], t["param"], true_pl, false_pl)
+                filed += 1
+                break
+    if filed:
+        log(f"boolean-sqli: {filed} boolean-based SQL injection(s) confirmed")
+    return filed

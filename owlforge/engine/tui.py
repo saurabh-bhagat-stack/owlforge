@@ -175,6 +175,10 @@ def _pretty_status(m: str, low: str) -> tuple[str, str, str, str] | None:
         return ("graphql-idor  ", "cyan", after("graphql-idor:"), "white")
     if low.startswith("graphql:"):
         return ("graphql  ", "cyan", after("graphql:"), "white")
+    if low.startswith("boolean-sqli:") or low.startswith("blind-sqli:"):
+        return ("sqli ✓ ", "bold green", "confirmed blind SQL injection deterministically "
+                "— " + (after("boolean-sqli:") if "boolean-sqli:" in low else after("blind-sqli:")),
+                "white")
     if low.startswith("sqli-extract:"):
         return ("sqli 💰 ", "bold green", "pulled a live value straight out of the database "
                 "— " + after("sqli-extract:"), "white")

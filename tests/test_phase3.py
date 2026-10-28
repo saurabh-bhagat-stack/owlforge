@@ -149,7 +149,10 @@ def test_system_prompt_includes_playbooks():
     from owlforge.engine.prompts import system_prompt
 
     sp = system_prompt("https://t.test", "assess it", "standard")
-    assert "Methodology & playbooks" in sp and "SQL injection" in sp
+    # the methodology overview is always present; per-class packs are injected per
+    # specialist (not dumped here), so the focused prompt stays lean for weak models
+    assert "Methodology" in sp and "MAP the attack surface" in sp
+    assert "UNION SELECT" not in sp and "template expression" not in sp
 
 
 def test_access_control_finding_not_auto_validated(isolated):

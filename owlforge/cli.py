@@ -305,6 +305,9 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
         from owlforge.engine.oast import oast_scan
         oast_scan(aid, read_blackboard(aid), sandbox_client, session_headers, cfg.oast,
                   log=lambda m: emit("status", m))
+        from owlforge.engine.blindsqli import boolean_based_sqli_scan
+        boolean_based_sqli_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                                log=lambda m: emit("status", m))
         from owlforge.engine.blindsqli import time_based_sqli_scan
         time_based_sqli_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                              log=lambda m: emit("status", m))

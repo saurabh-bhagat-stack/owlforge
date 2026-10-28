@@ -7,7 +7,11 @@ from owlforge.knowledge import render_playbooks
 
 
 def system_prompt(target: str, instructions: str, scan_mode: str) -> str:
-    playbooks = render_playbooks()
+    # Only the methodology overview goes in every specialist's system prompt; the
+    # per-class technique packs (vuln/sqli.md, vuln/xss.md, …) are injected into each
+    # specialist's instructions by the orchestrator (select_knowledge), so a focused
+    # SQLi specialist is not diluted with XSS/XXE/SSTI/etc. methodology it will not use.
+    playbooks = render_playbooks(["methodology"])
     return f"""You are owlforge, an autonomous security assessment agent.
 
 # Target
@@ -31,7 +35,7 @@ def system_prompt(target: str, instructions: str, scan_mode: str) -> str:
 - When you have done a meaningful first pass (or instructions are satisfied), call `finish`
   with a concise summary of what you observed. Do not loop forever.
 
-# Methodology & playbooks
+# Methodology (read first)
 {playbooks}
 
 Begin by planning with `think`, then MAP the attack surface and probe each input."""
