@@ -644,7 +644,7 @@ def run(
     # above, before any full-screen UI, because it needs a terminal prompt.)
     def _full(emit, steer=None):
         nonlocal identity_set
-        from owlforge.engine.recon import nuclei_scan, persist_new, run_recon
+        from owlforge.engine.recon import nuclei_scan, persist_new, run_recon, summarize_surface
         surface_text, session_headers, auth_summary = "", {}, ""
         try:
             surface_text, session_headers, auth_summary = run_recon(
@@ -652,6 +652,8 @@ def run(
                 network_recon_enabled=network_recon, browser_recon_enabled=True,
                 scope=scope, client=client, log=lambda m: emit("status", m))
             emit("status", f"auth: {auth_summary}")
+            for _sl in summarize_surface(aid):
+                emit("status", _sl)
             try:
                 nuclei_scan(aid, target, sandbox_client,
                             log=lambda m: emit("status", f"nuclei: {m}"))

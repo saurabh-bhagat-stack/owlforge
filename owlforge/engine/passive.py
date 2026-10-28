@@ -44,17 +44,17 @@ def scan_response(url: str, resp: dict) -> list[PassiveFinding]:
         out.append(PassiveFinding(title=title, severity=sev, evidence=evidence, detail=detail, url=url))
 
     if not csp:
-        add("Missing Content-Security-Policy", "low", "no content-security-policy header",
+        add("Missing Content-Security-Policy", "info", "no content-security-policy header",
             "No CSP — the page has no browser-enforced restriction on script/style/framing sources.")
     if https and "strict-transport-security" not in h:
-        add("Missing HSTS", "low", "no strict-transport-security header",
+        add("Missing HSTS", "info", "no strict-transport-security header",
             "HTTPS response without HSTS — allows SSL-strip / downgrade on first visit.")
     if h.get("x-content-type-options", "").lower() != "nosniff":
-        add("Missing X-Content-Type-Options: nosniff", "low",
+        add("Missing X-Content-Type-Options: nosniff", "info",
             f"x-content-type-options={h.get('x-content-type-options', '(absent)')}",
             "Browser MIME-sniffing not disabled — can enable content-type confusion attacks.")
     if "x-frame-options" not in h and "frame-ancestors" not in csp.lower():
-        add("Clickjacking: no X-Frame-Options / frame-ancestors", "low",
+        add("Clickjacking: no X-Frame-Options / frame-ancestors", "info",
             "no x-frame-options and no CSP frame-ancestors",
             "Page can be framed by any origin — clickjacking exposure.")
 

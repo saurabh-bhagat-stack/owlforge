@@ -1109,3 +1109,52 @@ def nuclei_scan(assessment_id: str, target: str, sandbox_client,
     log(f"nuclei: {len(hits)} match(es), {filed} finding(s) filed")
     return filed
 
+
+def summarize_surface(assessment_id: str) -> list[str]:
+    """A few human lines describing WHAT recon actually found (not just counts): the
+    privileged paths, the parameters worth attacking, and the forms — so the operator sees
+    the real surface, not '11 surface items'."""
+    from urllib.parse import urlsplit
+
+    from sqlmodel import select
+
+    from owlforge.store.db import session
+    from owlforge.store.models import SurfaceItem
+    _PRIV = ("/admin", "/manage", "/internal", "/backoffice", "/console", "/config",
+             "/superuser", "/staff", "/dashboard", "/moderator")
+    with session() as s:
+        items = [{"url": r.url, "method": (r.method or "GET").upper(),
+                  "params": list(r.params or []), "source": r.source}
+                 for r in s.exec(select(SurfaceItem).where(
+                     SurfaceItem.assessment_id == assessment_id)).all() if r.url]
+    if not items:
+        return []
+    withparams = [it for it in items if it["params"]]
+    forms = [it for it in items if it["source"] in ("form", "browser-form")]
+    priv, seen = [], set()
+    for it in items:
+        path = urlsplit(it["url"]).path or "/"
+        if any(seg in it["url"].lower() for seg in _PRIV) and path not in seen:
+            seen.add(path)
+            priv.append(path)
+    params = []
+    for it in withparams:
+        for prm in it["params"]:
+            if prm not in params:
+                params.append(prm)
+    form_paths, fseen = [], set()
+    for f in forms:
+        path = urlsplit(f["url"]).path or "/"
+        if path not in fseen:
+            fseen.add(path)
+            form_paths.append(path)
+    lines = [f"surface: {len(items)} endpoint(s) — {len(withparams)} take parameters, "
+             f"{len(form_paths)} form(s)"]
+    if priv:
+        lines.append("surface: privileged/admin paths — " + ", ".join(priv[:8]))
+    if params:
+        lines.append("surface: parameters to attack — " + ", ".join(params[:14])
+                     + (" …" if len(params) > 14 else ""))
+    if form_paths:
+        lines.append("surface: forms — " + ", ".join(form_paths[:8]))
+    return lines

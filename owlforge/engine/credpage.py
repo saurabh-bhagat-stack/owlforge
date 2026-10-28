@@ -173,7 +173,7 @@ def establish_from_login_page(assessment_id: str, target: str, sandbox, request_
             user_field=form.get("user_field"), pass_field=form.get("pass_field"),
             check_url=urljoin(lu, "/my-account"), log=log)
         if _bh:
-            log(f"browser-logged-in with harvested credentials ({creds['username']}:***) via {path}")
+            log(f"browser-logged-in with harvested credentials ({creds['username']}:{creds['password']}) via {path}")
             _file_exposed_credentials(assessment_id, lu, creds)
             return _bh, f"{creds['username']} from {path} (browser)"
 
@@ -190,7 +190,7 @@ def establish_from_login_page(assessment_id: str, target: str, sandbox, request_
         check = rq("GET", urljoin(lu, "/my-account"))
         body = (check.get("body") or "").lower()
         if "log out" in body or "logout" in body or creds["username"].lower() in body:
-            log(f"harvested login-page credentials ({creds['username']}:***) and logged in via {path}")
+            log(f"harvested login-page credentials ({creds['username']}:{creds['password']}) and logged in via {path}")
             _file_exposed_credentials(assessment_id, lu, creds)
             return {"Cookie": cookie_hdr}, f"{creds['username']} from {path}"
     return {}, ""

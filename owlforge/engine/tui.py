@@ -95,14 +95,18 @@ def _pretty_status(m: str, low: str) -> tuple[str, str, str, str] | None:
     if low.startswith("understand") or "scanning pages/js/files for secrets" in low:
         return ("secrets  ", "cyan", "scanning pages, JS & files for leaked secrets and credentials", "white")
     if "browser-logged-in" in low or ("harvested" in low and "credential" in low):
-        who = re.search(r"\(([^:)]+)", m)
+        cred = re.search(r"\(([^)]+)\)", m)
+        creds = cred.group(1) if cred else "an account shown on the page"
         return ("auth ✓ ", "bold green",
-                f"logged in through the browser as {who.group(1) if who else 'a found account'} "
-                "(credentials were on the login page)", "white")
+                f"logged in with credentials found on the page — {creds}", "white")
     if low.startswith("auth:"):
         return ("auth  ", "bold green", after("auth:"), "white")
     if low.startswith("recon-summary:"):
         return ("recon ✓ ", "bold cyan", "recon complete — " + after("recon-summary:"), "white")
+    if low.startswith("surface:"):
+        return ("surface  ", "bold green", after("surface:"), "white")
+    if "auth recon" in low and "re-mapping" in low:
+        return ("recon  ", "cyan", "re-mapping the surface while logged in", "white")
 
     # --- seeding (acting like a tester: make our own data to attack) ----------------------
     if low.startswith("seed:"):
@@ -384,6 +388,7 @@ class ScanApp(App):
         self.scan_fn = scan_fn
         self._started = time.time()
         self._phase = "starting"
+        self._last_feed_line = ""
         self._done = False
         self.result_status = "completed"
         self.result_summary = ""
@@ -462,10 +467,13 @@ class ScanApp(App):
             self._phase = _phase_of(message) or self._phase
         line = narrate(type_, message)
         if line is not None:
-            try:
-                self.query_one("#activity", RichLog).write(line)
-            except Exception:
-                pass
+            _txt = line.plain
+            if _txt != self._last_feed_line:          # collapse consecutive identical lines
+                self._last_feed_line = _txt
+                try:
+                    self.query_one("#activity", RichLog).write(line)
+                except Exception:
+                    pass
         if type_ == "status":
             self._update_status()
             self._update_target()
