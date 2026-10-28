@@ -8,6 +8,8 @@ trap, so we don't need restart/liveness scaffolding.
 
 from __future__ import annotations
 
+import json
+import os
 import secrets
 import socket
 import subprocess
@@ -173,22 +175,54 @@ def remote_digest(image: str) -> str | None:
     return None
 
 
+def _digest_state_path() -> Path:
+    base = os.environ.get("OWLFORGE_HOME") or os.path.expanduser("~/.owlforge")
+    return Path(base) / ".image-digests.json"
+
+
+def _load_seen_digests() -> dict:
+    try:
+        return json.loads(_digest_state_path().read_text()) or {}
+    except Exception:
+        return {}
+
+
+def _record_seen_digest(image: str, digest: str) -> None:
+    try:
+        path = _digest_state_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        data = _load_seen_digests()
+        data[image] = digest
+        path.write_text(json.dumps(data))
+    except Exception:
+        pass
+
+
 def update_available(image: str) -> bool | None:
-    """True if the registry has a newer image than the local copy; False if up to date;
-    None if undeterminable (local build, offline, registry error) -> caller skips."""
-    local = local_digest(image)
-    if local is None:
-        return None
+    """True if the registry's image changed since we last saw/pulled it; False if unchanged
+    or first-seen; None if the registry is unreachable. Compares the REMOTE digest to the
+    LAST-SEEN remote digest — NOT to the local image digest, because buildx attested
+    multi-arch builds make the local repo digest and the registry index digest differ for the
+    SAME image, so a local-vs-remote comparison perpetually reports a false 'update available'."""
     remote = remote_digest(image)
     if remote is None:
         return None
-    return local != remote
+    prev = _load_seen_digests().get(image)
+    if not prev:
+        _record_seen_digest(image, remote)   # first sighting — remember it, don't nag
+        return False
+    return remote != prev
 
 
 def pull_image(image: str, log: Logger = print) -> bool:
     log(f"pulling {image} ...")
     proc = subprocess.run([container_engine(), "pull", image], text=True)
-    return proc.returncode == 0
+    ok = proc.returncode == 0
+    if ok:
+        d = remote_digest(image)
+        if d:
+            _record_seen_digest(image, d)   # so the freshness check compares remote-to-remote
+    return ok
 
 
 def _free_port() -> int:

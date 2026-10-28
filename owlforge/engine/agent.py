@@ -13,6 +13,7 @@ from owlforge.tools.base import ToolContext, ToolRegistry
 
 _MAX_TOOL_RESULT = 8000
 _DEDUP_TOOLS = {"http_request", "exec_command"}
+_DUP_ALLOWANCE = 8  # extra iterations so blocked-duplicate/idle turns don't burn real budget
 
 
 def _call_sig(name: str, args: dict | None) -> str:
@@ -64,8 +65,12 @@ async def run_single_agent(
     finding_nudge_sent = False
     bypass_nudge_sent = False
 
-    for turn in range(1, max_turns + 1):
-        emit("status", f"turn {turn}/{max_turns}")
+    turn = 0
+    for _iteration in range(max_turns + _DUP_ALLOWANCE):
+        if turn >= max_turns:
+            break
+        productive = False
+        emit("status", f"turn {turn + 1}/{max_turns}")
         turn_result = client.chat(messages, specs, temperature=0.2, max_tokens=1024)
 
         if turn_result.content and turn_result.content.strip():
@@ -112,6 +117,7 @@ async def run_single_agent(
                                  "DIFFERENT endpoint/parameter from the surface, or — if you already "
                                  "have evidence — call create_finding. If genuinely done, call finish.")))
                     continue
+            productive = True   # a non-duplicate tool is running — this turn counts
             try:
                 result = await tool.run(call.arguments, ctx)
             except Exception as e:  # a tool crash must not kill the loop
@@ -133,6 +139,9 @@ async def run_single_agent(
             if tool.lifecycle:
                 lifecycle = True
                 last_summary = str(call.arguments.get("summary", "")).strip()
+
+        if productive:
+            turn += 1   # a turn that only hit blocked duplicates does NOT consume budget
 
         if lifecycle:
             if findings_created == 0 and not bypass_nudge_sent and expected_signal:

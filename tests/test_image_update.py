@@ -1,4 +1,4 @@
-"""Sandbox image freshness check: digest parsing + update_available."""
+"""Sandbox image freshness check: digest parsing + update_available (remote-to-remote)."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -14,6 +14,7 @@ def _patch(monkeypatch, *, local_stdout="", local_rc=0, remote_stdout="", remote
             return SimpleNamespace(returncode=remote_rc, stdout=remote_stdout, stderr="")
         return SimpleNamespace(returncode=1, stdout="", stderr="")
     monkeypatch.setattr(mgr, "_run", fake_run)
+    monkeypatch.setattr(mgr, "container_engine", lambda: "docker")
 
 
 def test_local_digest_parsed(monkeypatch):
@@ -31,23 +32,29 @@ def test_remote_digest_from_imagetools(monkeypatch):
     assert mgr.remote_digest("img") == "sha256:bbb"
 
 
-def test_update_available_true_when_digests_differ(monkeypatch):
-    _patch(monkeypatch, local_stdout="img@sha256:aaa ",
-           remote_stdout="Digest: sha256:bbb\n")
+def test_update_available_true_when_remote_changed(tmp_path, monkeypatch):
+    monkeypatch.setenv("OWLFORGE_HOME", str(tmp_path))
+    mgr._record_seen_digest("img", "sha256:aaa")          # what we last saw
+    _patch(monkeypatch, remote_stdout="Digest: sha256:bbb\n")   # registry moved on
     assert mgr.update_available("img") is True
 
 
-def test_update_available_false_when_same(monkeypatch):
-    _patch(monkeypatch, local_stdout="img@sha256:aaa ",
-           remote_stdout="Digest: sha256:aaa\n")
+def test_update_available_false_when_same(tmp_path, monkeypatch):
+    monkeypatch.setenv("OWLFORGE_HOME", str(tmp_path))
+    mgr._record_seen_digest("img", "sha256:aaa")
+    _patch(monkeypatch, remote_stdout="Digest: sha256:aaa\n")
     assert mgr.update_available("img") is False
 
 
-def test_update_available_none_for_local_build(monkeypatch):
-    _patch(monkeypatch, local_stdout="", remote_stdout="Digest: sha256:bbb\n")
-    assert mgr.update_available("img") is None       # can't compare -> skip (no nudge)
+def test_update_available_first_sighting_records_and_is_quiet(tmp_path, monkeypatch):
+    monkeypatch.setenv("OWLFORGE_HOME", str(tmp_path))
+    _patch(monkeypatch, remote_stdout="Digest: sha256:bbb\n")
+    assert mgr.update_available("img") is False      # first time: record, don't nag
+    assert mgr.update_available("img") is False      # still the same remote: stay quiet
+    assert mgr._load_seen_digests().get("img") == "sha256:bbb"
 
 
-def test_update_available_none_when_registry_unreachable(monkeypatch):
-    _patch(monkeypatch, local_stdout="img@sha256:aaa ", remote_rc=1, remote_stdout="")
-    assert mgr.update_available("img") is None
+def test_update_available_none_when_registry_unreachable(tmp_path, monkeypatch):
+    monkeypatch.setenv("OWLFORGE_HOME", str(tmp_path))
+    _patch(monkeypatch, remote_rc=1, remote_stdout="")
+    assert mgr.update_available("img") is None       # can't reach registry -> skip (no nudge)

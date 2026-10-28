@@ -619,82 +619,6 @@ def run(
     ]
     console.print(Panel.fit(chr(10).join(panel), title="assessment started", border_style="cyan"))
 
-    # --- recon (always): unauth -> auto-escalate to auth, interactive SPA map, nuclei ---
-    from owlforge.engine.recon import nuclei_scan, run_recon
-    surface_text, session_headers, auth_summary = "", {}, ""
-    try:
-        surface_text, session_headers, auth_summary = run_recon(
-            aid, target, sandbox_client, user_auth=user_auth, max_pages=recon_pages,
-            network_recon_enabled=network_recon, browser_recon_enabled=True,
-            scope=scope, client=client,
-            log=lambda m: console.print(rf"[dim]\[recon] {m}[/]"))
-        console.print(rf"[dim]\[auth] {auth_summary}[/]")
-        try:
-            nuclei_scan(aid, target, sandbox_client,
-                        log=lambda m: console.print(rf"[dim]\[nuclei] {m}[/]"))
-        except Exception as e:
-            console.print(f"[yellow]nuclei failed: {e}[/]")
-        if surface_text:
-            _inv = surface_text.rstrip()
-            if len(_inv) > 1400:  # cut on a newline so a URL is never sliced in half
-                _inv = _inv[:1400].rsplit("\n", 1)[0] + "\n… (truncated — full inventory in the report)"
-            console.print(f"[dim]\\[recon] surface inventory:\n{_inv}[/]")
-    except Exception as e:
-        console.print(f"[yellow]recon failed: {e}[/]")
-
-    if _spec_items:
-        from owlforge.engine.recon import persist_new
-        _added = persist_new(aid, _spec_items, cap=400)
-        console.print(f"[dim]\\[spec] seeded {_added} endpoint(s) from the API description[/]")
-        from owlforge.engine.apiabuse import api_auth_scan
-        api_auth_scan(aid, _spec_items, sandbox_client,
-                      log=lambda m: console.print(rf"[dim]\[api-auth] {m}[/]"))
-
-    # stateful seeding (deep-by-default): if the app lets you register, make a throwaway
-    # account (a 2nd identity); if it lets you create/upload, create a marker object and
-    # capture its id — so access-control/IDOR is tested on data owlforge created itself.
-    try:
-        from owlforge.engine.orchestrator import read_blackboard as _rbb
-        from owlforge.engine.recon import persist_new as _pn
-        from owlforge.engine.seed import graphql_seed_objects, register_account, seed_objects
-        _inv = _rbb(aid)
-        _slog = lambda m: console.print(rf"[dim]\[seed] {m}[/]")  # noqa: E731
-        if identity_set is None and session_headers:
-            identity_set = [{"label": "session", "role": "user", "headers": session_headers}]
-        _reg = register_account(_inv, sandbox_client, target, log=_slog)
-        if _reg:
-            _reg["label"] = "owlforge-user-a"
-            if not session_headers and _reg.get("headers"):
-                session_headers = _reg["headers"]   # no operator creds — operate as this account
-                _slog("no operator session — operating as a self-registered account")
-            if identity_set is None:
-                identity_set = []
-            identity_set.append(_reg)
-            # multi-user depth: a second throwaway account enables horizontal (A-vs-B)
-            # access-control testing even when the operator supplied no identities
-            _reg2 = register_account(_inv, sandbox_client, target, log=_slog)
-            if _reg2 and _reg2.get("headers") and _reg2.get("headers") != _reg.get("headers"):
-                _reg2["label"] = "owlforge-user-b"
-                identity_set.append(_reg2)
-                _slog("provisioned a second throwaway account for A-vs-B authz testing")
-        _seeded = seed_objects(_inv, sandbox_client, session_headers, target, log=_slog)
-        if _seeded:
-            _pn(aid, _seeded, cap=400)
-            console.print(f"[dim]\\[seed] created {len(_seeded)} test object(s) for "
-                          "access-control testing[/]")
-        _gseeded = graphql_seed_objects(_inv, sandbox_client, session_headers, target, log=_slog)
-        if _gseeded:
-            console.print(f"[dim]\\[seed] created {len(_gseeded)} GraphQL object(s)[/]")
-            from owlforge.engine.graphqlscan import graphql_idor_scan
-            graphql_idor_scan(aid, _gseeded, sandbox_client, session_headers,
-                              identity_set, log=_slog)
-    except Exception as e:
-        console.print(f"[yellow]seed step skipped: {type(e).__name__}: {e}[/]")
-
-    import re as _re
-    _tm = _re.search(r"tech=([^;\n]+)", surface_text or "")
-    detected_tech = [t.strip() for t in _tm.group(1).split(",")] if _tm else []
-    detected_tech = [t for t in detected_tech if t and t != "?"]
     _use_tui = dashboard_ui and console.is_terminal and not non_interactive
 
     def _checkpoint(keys):
@@ -713,22 +637,96 @@ def run(
     report_path = None
     summary = ""
 
-    def _hunt(_emit, _steer=None):
+    # The whole assessment — recon, auth escalation, seeding, then the hunt/validation/report
+    # — runs inside this one function so the interactive dashboard (when active) owns EVERY
+    # phase, not just the hunt. All logging goes through `emit`, which the dashboard renders
+    # live and the plain Emitter prints to the console. (Interactive SSO capture already ran
+    # above, before any full-screen UI, because it needs a terminal prompt.)
+    def _full(emit, steer=None):
+        nonlocal identity_set
+        from owlforge.engine.recon import nuclei_scan, persist_new, run_recon
+        surface_text, session_headers, auth_summary = "", {}, ""
+        try:
+            surface_text, session_headers, auth_summary = run_recon(
+                aid, target, sandbox_client, user_auth=user_auth, max_pages=recon_pages,
+                network_recon_enabled=network_recon, browser_recon_enabled=True,
+                scope=scope, client=client, log=lambda m: emit("status", m))
+            emit("status", f"auth: {auth_summary}")
+            try:
+                nuclei_scan(aid, target, sandbox_client,
+                            log=lambda m: emit("status", f"nuclei: {m}"))
+            except Exception as e:
+                emit("log", f"nuclei failed: {e}")
+        except Exception as e:
+            emit("error", f"recon failed: {type(e).__name__}: {e}")
+
+        if _spec_items:
+            _added = persist_new(aid, _spec_items, cap=400)
+            emit("status", f"spec: seeded {_added} endpoint(s) from the API description")
+            try:
+                from owlforge.engine.apiabuse import api_auth_scan
+                api_auth_scan(aid, _spec_items, sandbox_client,
+                              log=lambda m: emit("status", f"api-auth: {m}"))
+            except Exception as e:
+                emit("log", f"api-auth failed: {e}")
+
+        # stateful seeding: register a throwaway account (+ a 2nd for A-vs-B) and create marker
+        # objects (form / JSON / multipart / GraphQL), so access-control runs on owlforge's data.
+        try:
+            from owlforge.engine.orchestrator import read_blackboard as _rbb
+            from owlforge.engine.seed import graphql_seed_objects, register_account, seed_objects
+            _inv = _rbb(aid)
+            _slog = lambda m: emit("status", f"seed: {m}")  # noqa: E731
+            if identity_set is None and session_headers:
+                identity_set = [{"label": "session", "role": "user", "headers": session_headers}]
+            _reg = register_account(_inv, sandbox_client, target, log=_slog)
+            if _reg:
+                _reg["label"] = "owlforge-user-a"
+                if not session_headers and _reg.get("headers"):
+                    session_headers = _reg["headers"]   # no operator creds — operate as this account
+                    _slog("no operator session — operating as a self-registered account")
+                if identity_set is None:
+                    identity_set = []
+                identity_set.append(_reg)
+                # a second throwaway account enables horizontal (A-vs-B) access-control testing
+                _reg2 = register_account(_inv, sandbox_client, target, log=_slog)
+                if _reg2 and _reg2.get("headers") and _reg2.get("headers") != _reg.get("headers"):
+                    _reg2["label"] = "owlforge-user-b"
+                    identity_set.append(_reg2)
+                    _slog("provisioned a second throwaway account for A-vs-B authz testing")
+            _seeded = seed_objects(_inv, sandbox_client, session_headers, target, log=_slog)
+            if _seeded:
+                persist_new(aid, _seeded, cap=400)
+                emit("status", f"seed: created {len(_seeded)} test object(s) for access-control testing")
+            _gseeded = graphql_seed_objects(_inv, sandbox_client, session_headers, target, log=_slog)
+            if _gseeded:
+                emit("status", f"seed: created {len(_gseeded)} GraphQL object(s)")
+                from owlforge.engine.graphqlscan import graphql_idor_scan
+                graphql_idor_scan(aid, _gseeded, sandbox_client, session_headers,
+                                  identity_set, log=_slog)
+        except Exception as e:
+            emit("log", f"seed step skipped: {type(e).__name__}: {e}")
+
+        import re as _re
+        _tm = _re.search(r"tech=([^;\n]+)", surface_text or "")
+        detected_tech = [t.strip() for t in _tm.group(1).split(",")] if _tm else []
+        detected_tech = [t for t in detected_tech if t and t != "?"]
+
         return _run_hunt(
             aid, target=target, message=message, cfg=cfg, client=client,
             sandbox_client=sandbox_client, session_headers=session_headers,
             identity_set=identity_set, login_specs=login_specs,
-            auth_summary=auth_summary, max_turns=max_turns, scope=scope, emit=_emit,
+            auth_summary=auth_summary, max_turns=max_turns, scope=scope, emit=emit,
             done_seed=_done_seed, checkpoint=_checkpoint, detected_tech=detected_tech,
-            steer_fn=_steer)
+            steer_fn=steer)
 
     try:
         if _use_tui:
             from owlforge.engine.tui import run_scan_tui
-            status, summary, report_path = run_scan_tui(aid, target, cfg.llm.model, _hunt)
+            status, summary, report_path = run_scan_tui(aid, target, cfg.llm.model, _full)
         else:
             emit = Emitter(aid, console=console)
-            summary, report_path = _hunt(emit)
+            summary, report_path = _full(emit)
     except KeyboardInterrupt:
         status = "stopped"
         console.print("[yellow]interrupted[/]")
