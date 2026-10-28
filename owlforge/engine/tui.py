@@ -68,58 +68,184 @@ _SPEC_RE = re.compile(r"\[specialist:([a-z_]+)\]\s*(.*)", re.I)
 _HTTP_RE = re.compile(r"http_request\s+([A-Z]+)\s+(\S+)")
 
 
+def _pretty_status(m: str, low: str) -> tuple[str, str, str, str] | None:
+    """Turn a terse engine status string into a human, talkative line:
+    (tag, tag_style, body, body_style). None -> caller uses a dim default."""
+    def after(key: str) -> str:
+        return m.split(key, 1)[-1].strip() if key in low else m.strip()
+
+    # --- recon ---------------------------------------------------------------------------
+    if low.startswith("unauth recon"):
+        return ("recon  ", "bold cyan", "sizing up the app as an anonymous visitor first", "white")
+    if "recon: crawled" in low:
+        return ("recon  ", "bold cyan", "crawled the site — " + m.split("crawled", 1)[-1].strip(), "white")
+    if low.startswith("content discovery"):
+        return ("recon  ", "cyan", "brute-forced hidden paths — found " + after("content discovery:"), "white")
+    if low.startswith("katana"):
+        return ("recon  ", "cyan", "JS-aware crawl turned up " + after("katana:"), "white")
+    if low.startswith("js recon"):
+        return ("recon  ", "cyan", "mined the JavaScript — " + after("js recon:"), "white")
+    if "interactive map" in low:
+        return ("recon  ", "cyan", "drove the app in a real browser to catch JS/XHR requests — "
+                + after("interactive map:"), "white")
+    if low.startswith("waf:"):
+        return ("recon  ", "cyan", "fingerprinted a WAF/CDN: " + after("waf:"), "white")
+    if low.startswith("passive:"):
+        return ("recon  ", "cyan", "noted " + after("passive:"), "white")
+    if low.startswith("understand") or "scanning pages/js/files for secrets" in low:
+        return ("secrets  ", "cyan", "scanning pages, JS & files for leaked secrets and credentials", "white")
+    if "browser-logged-in" in low or ("harvested" in low and "credential" in low):
+        who = re.search(r"\(([^:)]+)", m)
+        return ("auth ✓ ", "bold green",
+                f"logged in through the browser as {who.group(1) if who else 'a found account'} "
+                "(credentials were on the login page)", "white")
+    if low.startswith("auth:"):
+        return ("auth  ", "bold green", after("auth:"), "white")
+    if low.startswith("recon-summary:"):
+        return ("recon ✓ ", "bold cyan", "recon complete — " + after("recon-summary:"), "white")
+
+    # --- seeding (acting like a tester: make our own data to attack) ----------------------
+    if low.startswith("seed:"):
+        r = after("seed:")
+        if "logged in" in r:
+            r = "registered a throwaway account and logged in (two-step)"
+        elif "registered a throwaway" in r or "registered (" in r and "session" in r:
+            r = "registered a throwaway account to test with"
+        elif "created a test object" in r:
+            r = "created a test object to attack — " + r.split("->", 1)[-1].strip()
+        elif "could not establish" in r:
+            r = "registered, but could not get a session (login step needed)"
+        elif "provisioned a second" in r:
+            r = "made a 2nd account so we can test one user against another (IDOR)"
+        return ("seed  ", "magenta", r, "white")
+
+    # --- nuclei / API spec ---------------------------------------------------------------
+    if low.startswith("nuclei:"):
+        return ("nuclei  ", "cyan", "ran the CVE/misconfig template set — " + after("nuclei:"), "white")
+    if low.startswith("spec:"):
+        return ("api-spec  ", "cyan", "loaded " + after("spec:") + " from the API description", "white")
+    if low.startswith("api-auth:"):
+        return ("api-auth  ", "cyan", "checking spec-protected ops for missing auth — " + after("api-auth:"), "white")
+    if low.startswith("api-fuzz:"):
+        return ("api-fuzz  ", "cyan", "fuzzing JSON request bodies — " + after("api-fuzz:"), "white")
+    if low.startswith("api-method:"):
+        return ("api-method  ", "cyan", "probing undocumented HTTP methods — " + after("api-method:"), "white")
+
+    # --- planning / app model ------------------------------------------------------------
+    if low.startswith("orchestrator round"):
+        return ("plan  ", "bold blue", "re-planning on newly-found surface — " + m.split(":", 1)[-1].strip(), "white")
+    if low.startswith("orchestrator:"):
+        return ("plan  ", "bold blue", "planning the attack — " + after("orchestrator:"), "white")
+    if low.startswith("app-model:"):
+        return ("model  ", "blue", "built a model of the app (entities, roles, workflows)", "white")
+
+    # --- deterministic passes ------------------------------------------------------------
+    if low.startswith("oast:"):
+        r = after("oast:")
+        if "confirmed by callback" in r:
+            return ("oast 💥 ", "bold green", "blind vulnerability CONFIRMED by an out-of-band callback!", "white")
+        if "callback host" in r:
+            return ("oast  ", "cyan", "out-of-band listener is ready for blind-bug callbacks", "white")
+        if "injected" in r:
+            return ("oast  ", "cyan", "fired out-of-band payloads and waiting for a callback…", "white")
+        return ("oast  ", "cyan", r, "white")
+    if low.startswith("access-control:"):
+        if "held" in low:
+            return ("access-control  ", "cyan", "authz boundary held — no IDOR on tested endpoints", "white")
+        return ("access-control  ", "cyan", "testing the authorization boundary across identities", "white")
+    if low.startswith("role-matrix:"):
+        return ("role-matrix  ", "cyan", "admin/privileged paths across roles — " + after("role-matrix:"), "white")
+    if low.startswith("scenario:"):
+        return ("scenario  ", "cyan", "business-logic scenarios — " + after("scenario:"), "white")
+    if low.startswith("business-logic:"):
+        return ("business-logic  ", "cyan", after("business-logic:"), "white")
+    if low.startswith("client-side:"):
+        return ("client-side  ", "cyan", after("client-side:"), "white")
+    if low.startswith("csrf:"):
+        return ("csrf  ", "cyan", after("csrf:"), "white")
+    if low.startswith("cors:"):
+        return ("cors  ", "cyan", after("cors:"), "white")
+    if low.startswith("smuggle:"):
+        return ("smuggle  ", "cyan", "request-smuggling check — " + after("smuggle:"), "white")
+    if low.startswith("graphql-idor:"):
+        return ("graphql-idor  ", "cyan", after("graphql-idor:"), "white")
+    if low.startswith("graphql:"):
+        return ("graphql  ", "cyan", after("graphql:"), "white")
+    if low.startswith("sqlmap:"):
+        return ("sqlmap  ", "cyan", after("sqlmap:"), "white")
+
+    # --- validation / report -------------------------------------------------------------
+    if "final validation sweep" in low:
+        return ("validate  ", "bold white", "final pass — re-verifying every finding by replaying it", "white")
+    if low.startswith("validation —"):
+        return ("validate ✓ ", "bold white", after("validation —"), "white")
+    if low.startswith("deepened:"):
+        return ("deepen  ", "cyan", "dug deeper into " + after("deepened:"), "white")
+    if low.startswith("collapse —") or low.startswith("dedupe —"):
+        return ("report  ", "dim", "tidying the report (merging duplicate / per-page findings)", "dim")
+    if "reporting phase" in low:
+        return ("report  ", "bold white", "writing up the report", "white")
+    if "assessment finished by agent" in low:
+        return ("done  ", "green", "specialist wrapped up", "white")
+    if "max turns reached" in low:
+        return ("budget  ", "dim", "specialist hit its step budget — summarizing", "dim")
+    if "[reauth]" in low:
+        return ("re-auth  ", "yellow", "session expired mid-scan — logging back in", "white")
+    if "[steer]" in low:
+        return ("steer  ", "magenta", "operator steer: " + m.split("[steer]", 1)[-1].strip(), "white")
+    return None
+
+
 def narrate(type_: str, message: str) -> Text | None:
+    """Map a raw (type, message) event to a human, talkative activity line (or None to skip).
+    Deterministic — it only re-phrases facts already in the event; it never invents anything."""
     m = message or ""
     low = m.lower()
     if type_ == "think":
-        return _line("thinking  ", "bold cyan", m[:200], "dim")
+        return _line("💭 thinking  ", "bold cyan", m[:220], "dim")
     if type_ == "finding_validated":
-        return _line("✓ confirmed  ", "bold green", m.replace("VALIDATED:", "").strip(), "white")
+        return _line("✓ confirmed  ", "bold green", m.replace("VALIDATED:", "").strip(), "bold white")
     if type_ == "finding":
-        return _line("candidate  ", "yellow", m.replace("candidate filed:", "").strip(), "white")
+        return _line("⚠ candidate  ", "yellow", m.replace("candidate filed:", "").strip(), "white")
     if type_ == "error":
-        return _line("error  ", "bold red", m, "red")
+        return _line("✗ error  ", "bold red", m, "red")
     if type_ == "tool_call":
         hm = _HTTP_RE.search(m)
         if hm:
-            return _line("  probe ", "dim", f"{hm.group(1)} {_short(hm.group(2))}", "dim")
+            return _line("   → ", "cyan", f"{hm.group(1)} {_short(hm.group(2))}", "cyan")
         if m.startswith("exec_command"):
-            return _line("  run ", "dim", m[len("exec_command"):].strip(" :")[:80], "dim")
+            return _line("   → ", "cyan", "run " + m[len("exec_command"):].strip(" :")[:80], "dim")
         return None
     if type_ == "tool_result":
         mm = re.search(r"->\s*(?:status=)?(\d{3})", m)
-        if mm and mm.group(1)[0] in "45":          # only surface 4xx/5xx (interesting)
-            return _line("    → ", "dim", mm.group(1), "yellow")
+        if mm and mm.group(1)[0] in "45":          # surface only 4xx/5xx (the interesting ones)
+            return _line("     ↳ ", "yellow", f"HTTP {mm.group(1)} — interesting", "yellow")
         return None
     if type_ == "status":
         sm = _SPEC_RE.search(m)
         if sm:
             cls = sm.group(1).lower()
-            rest = sm.group(2)
-            title = _SPEC_TITLES.get(cls, cls)
+            rest = sm.group(2).strip()
+            title = _SPEC_TITLES.get(cls, cls.replace("_", " "))
             if "skipped" in rest:
                 return None
             if "pre-probe auto-filed" in rest:
-                return _line(f"{title} ▸ ", "bold yellow", "pre-probe confirmed a finding", "white")
-            if "testing" in rest:
-                return _line(f"{title} ▸ ", "bold yellow", rest.strip(), "white")
-            return _line(f"{title} ▸ ", "bold yellow", rest.strip(), "white")
-        for key, label, st in (
-            ("recon-summary:", "recon", "white"), ("[reauth]", "re-auth", "yellow"),
-            ("[steer]", "steer", "magenta"), ("oast:", "oast", "white"),
-            ("cors:", "cors", "white"), ("csrf:", "csrf", "white"),
-            ("access-control:", "access-control", "white"), ("deepened:", "deepen", "cyan"),
-            ("validation —", "validation", "white"), ("collapse —", "report", "dim"),
-            ("dedupe —", "report", "dim"), ("reporting phase", "report", "dim"),
-            ("smuggle:", "smuggle", "white"), ("sqlmap:", "sqlmap", "white"),
-            ("graphql:", "graphql", "white"),
-        ):
-            if key in low:
-                return _line(f"{label}  ", "cyan", m.split(key, 1)[-1].strip() or m, st)
+                body = "pre-probe already confirmed a finding — filing it"
+            elif "browser scan auto-filed" in rest:
+                body = "the browser confirmed an executing XSS"
+            elif "reasoning over the app model" in rest:
+                body = "reasoning over the app model for logic/authz flaws"
+            elif "testing" in rest:
+                body = "probing " + rest.split("testing", 1)[-1].strip()
+            else:
+                body = rest
+            return _line(f"🔍 {title}  ", "bold yellow", body, "white")
         if re.search(r"turn \d+/\d+", low):
-            return None   # the turn counter lives in the status bar, not the feed
-        # surface any other phase status (recon / auth / seed / nuclei / spec / scenario / …)
-        return _line("  ·  ", "dim", m[:160], "dim")
+            return None                             # the turn counter lives in the status bar
+        pretty = _pretty_status(m, low)
+        if pretty:
+            return _line(pretty[0], pretty[1], pretty[2], pretty[3])
+        return _line("  ·  ", "dim", m[:160], "dim")   # any other status — still shown, dim
     if type_ == "log" and ("[reauth]" in low or "blocked duplicate" in low):
         return _line("  note  ", "dim", m, "dim")
     return None
