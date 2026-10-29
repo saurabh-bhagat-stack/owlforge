@@ -257,6 +257,9 @@ def start(
         "-e", f"OWLFORGE_AGENTD_PORT={AGENTD_CONTAINER_PORT}",
         "-e", f"OWLFORGE_NOVNC_PORT={NOVNC_CONTAINER_PORT}",
         "-e", "OWLFORGE_WORKSPACE=/workspace",
+        "--label", "owlforge=1",
+        "--label", f"owlforge.pid={os.getpid()}",
+        "--label", f"owlforge.started={int(time.time())}",
         "-v", f"{workspace}:/workspace",
         image, 
     ]
@@ -286,3 +289,42 @@ def stop(session: SandboxSession, log: Logger = print) -> None:
         log(f"sandbox stopped ({session.name})")
     except Exception as e:
         log(f"sandbox stop warning: {e}")
+
+
+def reap_orphans(log: Logger = print, max_age_h: float = 24.0) -> int:
+    """Remove owlforge sandbox containers that have no live owner — a run killed with SIGKILL or
+    a closed terminal never runs its cleanup, orphaning its container. A container is reaped when
+    its `owlforge.pid` label points to a dead process, or (for unlabelled older containers) when
+    it is older than max_age_h. Containers of a LIVE owner are always left running."""
+    try:
+        out = _run([container_engine(), "ps", "-a", "--filter", "label=owlforge",
+                    "--format", '{{.Names}}\t{{.Label "owlforge.pid"}}\t{{.Label "owlforge.started"}}'],
+                   timeout=15)
+    except Exception:
+        return 0
+    if out.returncode != 0:
+        return 0
+    removed = 0
+    now = int(time.time())
+    for line in out.stdout.splitlines():
+        parts = (line.split("\t") + ["", ""])[:3]
+        name, pid, started = parts[0].strip(), parts[1].strip(), parts[2].strip()
+        if not name:
+            continue
+        alive = True
+        if pid.isdigit():
+            try:
+                os.kill(int(pid), 0)        # live process (or exists but not ours)
+            except ProcessLookupError:
+                alive = False
+            except Exception:
+                alive = True
+        elif started.isdigit():
+            alive = (now - int(started)) < max_age_h * 3600   # unlabelled: fall back to age
+        if alive:
+            continue
+        r = _run([container_engine(), "rm", "-f", name], timeout=20)
+        if r.returncode == 0:
+            removed += 1
+            log(f"reaped orphaned sandbox {name} (owner pid {pid or '?'} gone)")
+    return removed

@@ -590,6 +590,10 @@ def run(
     _maybe_update_image(cfg.sandbox.image, pull=pull, no_pull=no_pull,
                         interactive=console.is_terminal and not non_interactive)
     try:
+        manager.reap_orphans(log=sblog)   # clean up sandboxes from runs killed without cleanup
+    except Exception:
+        pass
+    try:
         sandbox_session = manager.start(
             cfg.sandbox.image, workspace=str(assessments_dir() / aid), log=sblog)
         sandbox_client = sandbox_session.client
@@ -1083,6 +1087,14 @@ def diff(
         console.print(f"[{color}]{label} ({len(items)})[/]")
         for title, ep in items:
             console.print(f"   • {title}" + (f"  [dim]{ep}[/]" if ep else ""))
+
+
+@sandbox_app.command("prune")
+def sandbox_prune() -> None:
+    """Remove sandbox containers left over from interrupted runs (keeps live ones)."""
+    n = manager.reap_orphans(log=lambda m: console.print(f"[dim]{m}[/]"))
+    console.print(f"[green]removed {n} orphaned sandbox container(s)[/]" if n
+                  else "[dim]no orphaned sandboxes[/]")
 
 
 @sandbox_app.command("build")
