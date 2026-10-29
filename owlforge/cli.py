@@ -224,6 +224,12 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
     summary = ""
     report_path = None
     _examined: set[str] = set()
+    # transparent mid-scan re-auth: wrap the client so any authenticated request that hits a
+    # dead session re-logs-in (fresh TOTP) and retries — the whole hunt stays authenticated.
+    if login_specs and sandbox_client is not None and session_headers:
+        from owlforge.engine.reauth import ReauthSandbox
+        sandbox_client = ReauthSandbox(sandbox_client, session_headers, login_specs,
+                                       log=lambda m: emit("status", m))
 
     try:
         from owlforge.engine.orchestrator import read_blackboard as _rb
