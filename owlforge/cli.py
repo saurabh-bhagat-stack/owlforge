@@ -438,6 +438,15 @@ def run(
     identities: str = typer.Option(
         None, "--identities",
         help="YAML of role-labelled credentials for multi-role / privilege-escalation testing."),
+    cred: list[str] = typer.Option(  # noqa: B008
+        None, "--cred",
+        help="Inline credentials 'user:pass' (or 'user pass'); @label / :role optional. "
+             "Repeatable or comma-separated for multiple users (horizontal IDOR). owlforge "
+             "finds the login form itself — no YAML needed."),
+    session: list[str] = typer.Option(  # noqa: B008
+        None, "--session",
+        help="A ready session: a Cookie string, a 'Header: value', several joined with ' | ', "
+             "or a pasted copy-as-cURL. Repeat (optional @label) for multiple identities."),
     model: str = typer.Option(
         None, "--model", help="Override the configured model id for this run."),
     network_recon: bool = typer.Option(
@@ -619,6 +628,43 @@ def run(
                            and (i.auth or {}).get("url")]
         except Exception as e:
             console.print(f"[yellow]identities load failed: {e}[/]")
+
+    # --- inline --session (ready headers) and --cred (auto-find login + log in) identities ---
+    from owlforge.engine.authspec import parse_creds, parse_sessions, resolve_cred_identities
+    _inline: list[dict] = []
+    for _sp in parse_sessions(session):
+        _inline.append({"label": _sp["label"] or f"session_{len(_inline) + 1}",
+                        "role": _sp["role"], "headers": _sp["headers"]})
+    _creds = parse_creds(cred)
+    if _creds and sandbox_client is not None:
+        def _cred_reqfn(method, url, headers=None, params=None, body=None):
+            try:
+                return sandbox_client.http_request(method, url, headers=headers,
+                                                   params=params, body=body)
+            except Exception:
+                return {}
+        for _ci in resolve_cred_identities(_creds, target, sandbox_client, _cred_reqfn,
+                                           log=lambda m: console.print(rf"[dim]{m}[/]")):
+            _inline.append(_ci)
+            _lg = _ci.get("login")
+            if _lg:
+                from urllib.parse import urlencode as _ue
+                login_specs.append({
+                    "url": _lg.get("action") or _lg["url"],
+                    "data": _ue({_lg["user_field"]: _lg["user"], _lg["pass_field"]: _lg["password"]}),
+                    "success": ""})
+    if _inline:
+        if identity_set is None:
+            identity_set = [{"label": "unauth", "role": "anonymous", "headers": {}}]
+        for _ci in _inline:
+            identity_set.append({"label": _ci["label"], "role": _ci["role"],
+                                 "headers": _ci["headers"]})
+        if user_auth.mode == "unauth":
+            _first = next((x for x in _inline if x.get("headers")), None)
+            if _first:
+                user_auth = AuthContext(mode="session", headers=_first["headers"])
+        console.print(f"[dim]inline auth: +{len(_inline)} identity(ies) "
+                      f"({', '.join(x['label'] for x in _inline)})[/]")
 
     from owlforge.engine.scope import build_scope
     scope = build_scope(target, scope=scope_in, out_of_scope=scope_out, only=None)

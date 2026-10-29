@@ -196,6 +196,28 @@ def establish_from_login_page(assessment_id: str, target: str, sandbox, request_
     return {}, ""
 
 
+def find_login_form(target: str, request_fn: RequestFn,
+                    log: Callable[[str], None] = lambda m: None) -> dict | None:
+    """Locate the login page and its fields WITHOUT logging in. Returns
+    {url, action, user_field, pass_field} or None. Used by inline --cred."""
+    base = target.rstrip("/")
+    for path in _LOGIN_PATHS:
+        try:
+            page = request_fn("GET", base + path) or {}
+        except Exception:
+            continue
+        html = page.get("body") or ""
+        if int(page.get("status") or 0) >= 400:
+            continue
+        if "<form" not in html.lower() and "password" not in html.lower():
+            continue
+        form = _extract_form(html)
+        if form.get("pass_field") or "password" in html.lower():
+            return {"url": base + path, "action": form.get("action"),
+                    "user_field": form.get("user_field"), "pass_field": form.get("pass_field")}
+    return None
+
+
 def _urlencode(d: dict) -> str:
     from urllib.parse import urlencode
     return urlencode(d)
