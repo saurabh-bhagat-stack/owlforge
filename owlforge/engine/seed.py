@@ -252,6 +252,14 @@ def register_account(inventory, sandbox, target,
             log(f"seed: registered ({username}) and logged in (two-step)")
             return {"label": "owlforge-registered", "role": "user", "headers": sess}
         log(f"seed: registered ({username}) but could not establish a session")
+    # no server-rendered <form> worked — a modern SPA signs up via a JSON API; try that
+    try:
+        from owlforge.engine.spaseed import register_json_spa
+        spa = register_json_spa(inventory, sandbox, target, log)
+        if spa:
+            return spa
+    except Exception:
+        pass
     return None
 
 
