@@ -53,3 +53,38 @@ def test_dedup_keeps_distinct_injected_params(tmp_path, monkeypatch):
     assert dedupe_findings("a") == 0           # different injected params -> both kept
     st = _statuses(db)
     assert st["f1"] == "validated" and st["f2"] == "validated"
+
+
+def test_dedup_merges_introspection_across_methods(tmp_path, monkeypatch):
+    # an endpoint/config-level issue (GraphQL introspection) filed as both GET and POST is one
+    # issue — method must not keep them apart.
+    db = _db(tmp_path, monkeypatch)
+    from owlforge.engine.validate import dedupe_findings
+    from owlforge.store.models import Finding
+    with db.session() as s:
+        s.add(Finding(id="g1", assessment_id="a", title="GraphQL introspection enabled",
+                      status="validated", severity="medium", endpoint="https://t/graphql",
+                      method="POST"))
+        s.add(Finding(id="g2", assessment_id="a", title="GraphQL introspection enabled",
+                      status="candidate", severity="medium", endpoint="https://t/graphql",
+                      method="GET"))
+        s.commit()
+    assert dedupe_findings("a") == 1
+    st = _statuses(db)
+    assert st["g1"] == "validated" and st["g2"] == "duplicate"
+
+
+def test_dedup_keeps_distinct_injection_methods(tmp_path, monkeypatch):
+    # a real injection finding is method-specific — GET vs POST must NOT be merged.
+    db = _db(tmp_path, monkeypatch)
+    from owlforge.engine.validate import dedupe_findings
+    from owlforge.store.models import Finding
+    with db.session() as s:
+        s.add(Finding(id="h1", assessment_id="a", title="SQL injection in 'q'",
+                      status="validated", severity="high", endpoint="https://t/x",
+                      method="GET", repro_params={"q": "1'"}))
+        s.add(Finding(id="h2", assessment_id="a", title="SQL injection in 'q'",
+                      status="validated", severity="high", endpoint="https://t/x",
+                      method="POST", repro_params={"q": "1'"}))
+        s.commit()
+    assert dedupe_findings("a") == 0           # different methods -> distinct sinks

@@ -375,7 +375,13 @@ def _dupe_key(title, endpoint, method, params):
     hint = _class_hint(title)
     title_key = (title or "").strip().lower() if hint == "other" else ""
     pkey = _payload_param(params) if hint != "other" else tuple(sorted((params or {}).keys()))
-    return (hint, (endpoint or "").rstrip("/"), (method or "GET").upper(), pkey, title_key)
+    # endpoint/config-level issues are a property of the endpoint, not the HTTP method, so the
+    # same issue filed as GET and POST (e.g. GraphQL introspection) must collapse to one.
+    _agnostic = ("introspection", "field suggestion", "missing ", "clickjacking",
+                 "cookie without", "version disclosure", "content-security", "hsts",
+                 "x-content-type", "x-frame", "cors ")
+    mkey = "" if any(k in (title or "").lower() for k in _agnostic) else (method or "GET").upper()
+    return (hint, (endpoint or "").rstrip("/"), mkey, pkey, title_key)
 
 
 _STATUS_RANK = {"validated": 3, "candidate": 2, "false_positive": 1, "duplicate": 0}
