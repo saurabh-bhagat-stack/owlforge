@@ -666,6 +666,26 @@ def run(
         console.print(f"[dim]inline auth: +{len(_inline)} identity(ies) "
                       f"({', '.join(x['label'] for x in _inline)})[/]")
 
+    # --- pre-flight: confirm each supplied identity actually authenticates (catch bad creds early) ---
+    if identity_set and sandbox_client is not None:
+        from owlforge.engine.identities import verify_identities
+        def _vrf(method, url, headers=None, params=None, body=None):
+            try:
+                return sandbox_client.http_request(method, url, headers=headers,
+                                                   params=params, body=body)
+            except Exception:
+                return {}
+        _pf = verify_identities(identity_set, _vrf, target)
+        _cred_pf = [r for r in _pf if r["ok"] is not None]
+        if _cred_pf:
+            _marks = {True: "[green]\u2713[/]", False: "[red]\u2717[/]", None: "[dim]\u2013[/]"}
+            console.print("[bold]auth preflight:[/] "
+                          + "  ".join(f"{r['label']} {_marks[r['ok']]}" for r in _pf))
+            _bad = [r["label"] for r in _cred_pf if not r["ok"]]
+            if _bad:
+                console.print(f"[yellow]  \u26a0 {len(_bad)} identity(ies) did NOT authenticate "
+                              f"({', '.join(_bad)}) \u2014 check the credentials/session; they run as "
+                              "anonymous.[/]")
     from owlforge.engine.scope import build_scope
     scope = build_scope(target, scope=scope_in, out_of_scope=scope_out, only=None)
 

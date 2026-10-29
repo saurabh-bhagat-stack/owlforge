@@ -136,6 +136,28 @@ def establish_all(identities: list[Identity], request_fn: RequestFn,
     return identities
 
 
+def verify_identities(identity_set: list[dict], request_fn: RequestFn, probe_url: str
+                      ) -> list[dict]:
+    """Pre-flight: confirm each supplied identity actually authenticates, BEFORE the scan,
+    so a typo'd password is caught in seconds instead of wasting a whole run as anon.
+    Returns [{label, ok, detail}] — ok True/False for credentialed identities, None for
+    the anonymous one."""
+    out = []
+    for ident in identity_set or []:
+        label = ident.get("label", "?")
+        headers = ident.get("headers") or {}
+        if (ident.get("role") == "anonymous") or not headers:
+            out.append({"label": label, "ok": None, "detail": "anonymous (no session)"})
+            continue
+        try:
+            ok = bool(session_alive(request_fn, probe_url, headers))
+        except Exception:
+            ok = True   # never block a run on a flaky probe
+        out.append({"label": label, "ok": ok,
+                    "detail": "session valid" if ok else "NOT authenticated (login page / 401)"})
+    return out
+
+
 def primary_identity(identities: list[Identity]) -> Identity | None:
     """The identity that drives authenticated recon/hunt: first with a real session
     (prefer a privileged role), else the unauth one."""
