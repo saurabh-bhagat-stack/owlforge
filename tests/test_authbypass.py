@@ -22,53 +22,57 @@ def _findings(db):
         return list(s.exec(select(Finding)))
 
 
-_INV = [{"url": "https://t/rest/user/login", "method": "POST", "params": []}]
-
-
-class _LoginApi:
-    """JSON login: returns a token ONLY when the body carries an injection payload."""
+class _JuiceLike:
+    """SPA: /login, /signin, /session serve the HTML shell; the real login is the JSON API
+    POST /rest/user/login (which the crawler never recorded)."""
+    SHELL = "<!doctype html><html><app-root></app-root></html>"
 
     def __init__(self, vulnerable: bool):
         self.vulnerable = vulnerable
 
     def http_request(self, method, url, *, headers=None, params=None, body=None,
                      follow_redirects=True, timeout_ms=30000):
-        if "/rest/user/login" in url and method == "POST":
-            b = body or ""
-            inj = any(m in b for m in ("OR 1=1", "'1'='1", "$ne", "$gt", "admin'"))
+        bare = url.rstrip("/")
+        if bare.endswith("/rest/user/login") and method == "POST":
+            inj = any(m in (body or "") for m in ("OR 1=1", "'1'='1", "$ne", "$gt", "admin'"))
             if self.vulnerable and inj:
                 return {"status": 200, "headers": {"content-type": "application/json"},
                         "body": '{"authentication":{"token":"ey.sessiontoken.abcdefghijkl"}}'}
             return {"status": 401, "headers": {}, "body": '{"error":"Invalid email or password"}'}
-        return {"status": 404, "headers": {}, "body": ""}       # no HTML login form exists
+        if any(bare.endswith(p) for p in ("/login", "/signin", "/session", "/sign-in")):
+            return {"status": 200, "headers": {}, "body": self.SHELL}       # SPA shell route
+        return {"status": 404, "headers": {}, "body": "not found"}
 
 
 def test_auth_signal_detects_token_and_cookie_not_loginpage():
     assert "token" in _auth_signal({"status": 200, "body": '{"token":"abcdefghijklmnop"}'})
     assert "session-cookie" in _auth_signal(
         {"status": 200, "headers": {"set-cookie": "connect.sid=s%3Aabcdef12345; Path=/"}, "body": ""})
-    # a login page / error is NOT an auth signal
     assert _auth_signal({"status": 200, "body": '<input type="password" name="password">'}) == set()
     assert _auth_signal({"status": 401, "body": "invalid password"}) == set()
 
 
-def test_login_targets_picks_api_login_endpoint():
-    ts = _login_targets(_INV, None)
-    assert any(t["url"].endswith("/rest/user/login") and t["kind"] == "api" for t in ts)
+def test_login_targets_injects_known_api_paths_from_target():
+    urls = [t["url"] for t in _login_targets([], None, "https://t/")]
+    assert "https://t/rest/user/login" in urls          # real login API, never crawled
+    assert "https://t/api/auth/login" in urls
 
 
-def test_bypass_filed_when_payload_authenticates(tmp_path, monkeypatch):
+def test_bypass_found_on_json_api_even_when_only_spa_routes_were_crawled(tmp_path, monkeypatch):
     db = _db(tmp_path, monkeypatch)
-    n = login_authbypass_scan("a", _INV, _LoginApi(vulnerable=True), "https://t/", {})
+    # inventory only has SPA shell routes; the real /rest/user/login comes from the known-paths list
+    inv = [{"url": "https://t/login", "method": "POST", "params": []},
+           {"url": "https://t/signin", "method": "POST", "params": []}]
+    n = login_authbypass_scan("a", inv, _JuiceLike(vulnerable=True), "https://t/", {})
     assert n == 1
     f = _findings(db)
     assert len(f) == 1
-    assert "Authentication bypass" in f[0].title
-    assert f[0].severity == "critical" and f[0].status == "validated"
+    assert "Authentication bypass" in f[0].title and f[0].severity == "critical"
+    assert f[0].endpoint.endswith("/rest/user/login")   # shell routes were skipped
 
 
 def test_no_finding_when_login_is_safe(tmp_path, monkeypatch):
     db = _db(tmp_path, monkeypatch)
-    n = login_authbypass_scan("a", _INV, _LoginApi(vulnerable=False), "https://t/", {})
+    n = login_authbypass_scan("a", [], _JuiceLike(vulnerable=False), "https://t/", {})
     assert n == 0
     assert _findings(db) == []
