@@ -81,3 +81,20 @@ def test_deserialization_blob_detected():
     from owlforge.engine.passive import scan_response
     titles = {f.title for f in scan_response("https://t/", {"headers": {"Set-Cookie": "state=rO0ABXNy"}, "body": ""})}
     assert any("deserialization" in x.lower() for x in titles)
+
+
+def test_session_cookie_never_expires_flagged():
+    from owlforge.engine.passive import scan_response
+    far = {"headers": {"Set-Cookie": "session=abc; Expires=Sun, 07 Jul 2058 22:34:53 GMT; "
+                       "HttpOnly; SameSite=Lax; Secure; Path=/"}}
+    titles = {f.title for f in scan_response("https://t/", far)}
+    assert any("never expires" in t for t in titles)     # the "old sessions" class
+
+
+def test_session_cookie_properly_scoped_is_quiet():
+    from owlforge.engine.passive import scan_response
+    # session-scoped (no Expires) and a short Max-Age must NOT be flagged for lifetime
+    scoped = {"headers": {"Set-Cookie": "session=abc; HttpOnly; SameSite=Lax; Secure; Path=/"}}
+    short = {"headers": {"Set-Cookie": "session=abc; Max-Age=3600; HttpOnly; SameSite=Lax; Secure"}}
+    for resp in (scoped, short):
+        assert not any("never expires" in f.title for f in scan_response("https://t/", resp))

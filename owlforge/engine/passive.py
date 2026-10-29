@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC
 
 RequestFn = Callable[..., dict]
 
@@ -74,6 +75,35 @@ def scan_response(url: str, resp: dict) -> list[PassiveFinding]:
         if "samesite" not in low:
             add(f"Cookie without SameSite: {name}", "low", sc[:160],
                 "No SameSite — cookie sent on cross-site requests (CSRF exposure).")
+        if sessiony:
+            # a session cookie should be session-scoped (no Expires/Max-Age) or short-lived;
+            # a far-future expiry means it survives browser close and never times out, so anyone
+            # reusing the browser (shared/public machine) stays logged in (the "old sessions" bug)
+            import re as _re
+            from datetime import datetime as _dt
+            from email.utils import parsedate_to_datetime as _pdt
+            life = None
+            _m = _re.search(r"max-age=(\d+)", low)
+            if _m:
+                life = int(_m.group(1))
+            else:
+                _e = _re.search(r"expires=([^;]+)", sc, _re.I)
+                if _e:
+                    try:
+                        _exp = _pdt(_e.group(1).strip())
+                        if _exp.tzinfo is None:
+                            _exp = _exp.replace(tzinfo=UTC)
+                        life = (_exp - _dt.now(UTC)).total_seconds()
+                    except Exception:
+                        life = None
+            if life is not None and life > 7 * 86400:      # persists > 7 days beyond the session
+                _days = int(life // 86400)
+                add(f"Session cookie never expires (persists ~{_days}d): {name}", "medium",
+                    sc[:160],
+                    f"The session cookie '{name}' has a lifetime of ~{_days} day(s) — it survives "
+                    "the browser closing and never times out. Anyone who reuses the browser on a "
+                    "shared or public machine stays authenticated without credentials. Issue "
+                    "session-scoped cookies and enforce a server-side idle + absolute timeout.")
 
     # permissive CORS
     acao = h.get("access-control-allow-origin", "")
