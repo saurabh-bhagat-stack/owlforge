@@ -54,8 +54,8 @@ class ReauthSandbox:
     def _refresh(self) -> bool:
         if not self._specs or time.monotonic() < self._until:
             return False
-        from owlforge.engine.identities import reauth_login
-        fresh = reauth_login(self._specs[0], self._reqfn, log=self._log) or {}
+        spec = self._specs[0]
+        fresh = self._browser_refresh(spec) or self._http_refresh(spec)
         if fresh:
             self._sh.clear()
             self._sh.update(fresh)
@@ -65,12 +65,51 @@ class ReauthSandbox:
         self._log("[reauth] session expired but automatic re-login failed")
         return False
 
+    def _browser_refresh(self, spec: dict) -> dict:
+        """A JWT/SPA session lives in localStorage, which a cookie-only HTTP re-login cannot
+        refresh — drive the real browser (captures cookie + bearer) when the spec carries the
+        raw credentials. Returns {} when unavailable so the HTTP path can take over."""
+        if not (spec.get("user") and spec.get("password")):
+            return {}
+        if not hasattr(self._inner, "browser_login"):
+            return {}
+        url = spec.get("browser_url") or spec.get("url")
+        if not url:
+            return {}
+        try:
+            from urllib.parse import urlsplit
+
+            from owlforge.engine.browserlogin import browser_login_session
+            u = urlsplit(url)
+            target = f"{u.scheme}://{u.netloc}/" if u.scheme else url
+            hdrs, _ok = browser_login_session(
+                self._inner, url, spec["user"], spec["password"], target,
+                user_field=spec.get("user_field"), pass_field=spec.get("pass_field"),
+                log=self._log)
+            return hdrs or {}
+        except Exception:
+            return {}
+
+    def _http_refresh(self, spec: dict) -> dict:
+        from owlforge.engine.identities import reauth_login
+        return reauth_login(spec, self._reqfn, log=self._log) or {}
+
+    @staticmethod
+    def _is_auth_endpoint(url: str) -> bool:
+        """A 401/redirect from the login/auth endpoint itself is a failed login attempt, not our
+        session dying — don't reauth on it (and don't storm the login during auth-bypass fuzzing)."""
+        try:
+            from owlforge.engine.authbypass import _LOGIN_PATH
+            return bool(_LOGIN_PATH.search(url or ""))
+        except Exception:
+            return False
+
     def http_request(self, method, url, *, headers=None, params=None, body=None, **kw):
         r = self._inner.http_request(method, url, headers=headers, params=params, body=body, **kw)
         # Act only when THIS request carried our session, so deliberately-anonymous probes
         # (e.g. access-control's anon identity) are never "repaired" into authenticated ones.
         carried = bool(headers) and bool(self._sh) and any(k in (headers or {}) for k in self._sh)
-        if carried and self._dead_session(r) and self._refresh():
+        if carried and not self._is_auth_endpoint(url) and self._dead_session(r) and self._refresh():
             h2 = dict(headers or {})
             h2.update(self._sh)
             r = self._inner.http_request(method, url, headers=h2, params=params, body=body, **kw)

@@ -323,6 +323,9 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
         from owlforge.engine.sqlmapconfirm import sqlmap_confirm
         sqlmap_confirm(aid, sandbox_client, session_headers,
                        log=lambda m: emit("status", m))
+        from owlforge.engine.authbypass import login_authbypass_scan
+        login_authbypass_scan(aid, read_blackboard(aid), sandbox_client, target,
+                              session_headers, log=lambda m: emit("status", m))
         from owlforge.engine.graphqlscan import graphql_scan
         graphql_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                      log=lambda m: emit("status", m), target=target)
@@ -674,8 +677,13 @@ def run(
                 from urllib.parse import urlencode as _ue
                 login_specs.append({
                     "url": _lg.get("action") or _lg["url"],
-                    "data": _ue({_lg["user_field"]: _lg["user"], _lg["pass_field"]: _lg["password"]}),
-                    "success": ""})
+                    "data": _ue({(_lg.get("user_field") or "username"): _lg["user"],
+                                 (_lg.get("pass_field") or "password"): _lg["password"]}),
+                    "success": "",
+                    # raw creds + the login page so mid-scan reauth can re-login a JWT/SPA
+                    # session via the browser (cookie-only HTTP reauth cannot refresh a token)
+                    "browser_url": _lg["url"], "user": _lg["user"], "password": _lg["password"],
+                    "user_field": _lg.get("user_field"), "pass_field": _lg.get("pass_field")})
     if _inline:
         if identity_set is None:
             identity_set = [{"label": "unauth", "role": "anonymous", "headers": {}}]
