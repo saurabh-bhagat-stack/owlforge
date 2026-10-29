@@ -50,6 +50,21 @@ class _Blind:
         return False
 
 
+class _Union:
+    """UNION-based: a 3-column table; wrong column counts 500, and the wrapped value echoes
+    only once it is placed in a column (NULLs fill the rest, no type mismatch)."""
+    def http_request(self, method, url, *, params=None, body=None, headers=None, timeout_ms=30_000):
+        v = next(iter((params or {}).values()), "") if params else (body or "")
+        if "UNION SELECT" in v:
+            cols = v.split("UNION SELECT", 1)[1].split("--", 1)[0]
+            if len([c for c in cols.split(",")]) != 3:
+                return {"status": 500, "body": "ERROR: each UNION query must have the same number of columns"}
+            if "version()" in v:
+                return {"status": 200, "body": f"<li>{_W}FakeDB 1.0/dbuser{_W}</li>"}
+            return {"status": 200, "body": "<li>catalog</li>"}
+        return {"status": 200, "body": "catalog"}
+
+
 class _Safe:
     def http_request(self, method, url, *, params=None, body=None, headers=None, timeout_ms=30_000):
         return {"status": 200, "body": "nothing interesting"}
@@ -64,9 +79,14 @@ def test_error_based_extracts_value():
     assert "error-based" in how
 
 
+def test_union_based_extracts_value():
+    val, how = extract_one(_Union(), T)
+    assert val == "FakeDB 1.0/dbuser" and "union-based" in how
+
+
 def test_boolean_blind_extracts_version():
     val, how = extract_one(_Blind(), T)
-    assert val == "PG9" and how == "boolean-blind"
+    assert val == "PG9" and how.startswith("boolean-blind")
 
 
 def test_not_injectable_returns_nothing():

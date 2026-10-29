@@ -151,6 +151,11 @@ def reflected_xss_scan(assessment_id: str, targets: list[dict], sandbox,
                                  or {}).get("executed"))
             except Exception:
                 executed = False
+            if not executed:
+                # a browser is the authority on execution — an un-executed reflection is a
+                # lead, not a finding; filing a candidate here just feeds the validator a
+                # false positive to reject. Skip it rather than add report noise.
+                continue
         note = ("The crafted payload executed in a real browser."
                 if executed else
                 f"Breakout characters {''.join(sorted(info['survived']))} are reflected "
