@@ -16,6 +16,7 @@ because the required privilege is inferred from the path — a human confirms in
 
 from __future__ import annotations
 
+import re as _re
 import secrets
 from collections.abc import Callable
 
@@ -87,6 +88,42 @@ def _file(assessment_id, url, actor_label, actor_role, anon):
         s.commit()
 
 
+def _norm(b: str) -> str:
+    """Normalise a body for shell comparison: drop nonces/hex ids and collapse whitespace."""
+    b = _re.sub(r"[0-9a-fA-F]{6,}", "", b or "")
+    return _re.sub(r"\\s+", " ", b).strip()
+
+
+def _catchall_shell(sandbox, origin, headers):
+    """An SPA serves the same HTML shell for EVERY route, so a privileged path returning
+    200-with-content proves nothing. Probe two random, impossible privileged-looking paths:
+    if both come back as the same 200 shell, return that shell (normalised) so the caller can
+    discount real endpoints that merely echo it. Returns '' when there is no catch-all (a bogus
+    path is NOT served as content), i.e. a real 200 on a privileged path is meaningful."""
+    from owlforge.engine.validate import _looks_like_login
+    bodies = []
+    for _ in range(2):
+        u = f"{origin}/admin-{secrets.token_hex(6)}/{secrets.token_hex(4)}"
+        r = _get(sandbox, u, headers)
+        body = r.get("body") or ""
+        if int(r.get("status") or 0) == 200 and len(body) >= 50 and not _looks_like_login(body):
+            bodies.append(_norm(body))
+        else:
+            return ""
+    if bodies[0] and bodies[0] == bodies[1]:
+        return bodies[0]
+    if bodies[0] and bodies[1] and abs(len(bodies[0]) - len(bodies[1])) <= max(20, len(bodies[0]) // 50):
+        return bodies[0]
+    return ""
+
+
+def _is_shell(body: str, catchall: str) -> bool:
+    if not catchall:
+        return False
+    n = _norm(body)
+    return n == catchall or abs(len(n) - len(catchall)) <= max(20, len(catchall) // 50)
+
+
 def capability_matrix_scan(assessment_id, inventory, sandbox, session_headers, identities,
                            log: Callable[[str], None] = lambda m: None, cap: int = 20) -> int:
     """Build a role x privileged-endpoint access matrix and flag below-privilege access."""
@@ -106,6 +143,12 @@ def capability_matrix_scan(assessment_id, inventory, sandbox, session_headers, i
         return 0
     log(f"role-matrix: testing {min(len(eps), cap)} privileged-path endpoint(s) across "
         f"{len(actors)} actor(s)")
+    from urllib.parse import urlsplit
+    _u = urlsplit(eps[0])
+    catchall = _catchall_shell(sandbox, f"{_u.scheme}://{_u.netloc}", session_headers or {})
+    if catchall:
+        log("role-matrix: SPA catch-all detected (every route returns the same shell) — "
+            "discounting endpoints that only echo it")
     filed = 0
     for url in eps[:cap]:
         reached = []
@@ -113,7 +156,8 @@ def capability_matrix_scan(assessment_id, inventory, sandbox, session_headers, i
         for a in actors:
             r = _get(sandbox, url, a.get("headers"))
             ok = (int(r.get("status") or 0) == 200 and len(r.get("body") or "") >= 50
-                  and not _looks_like_login(r.get("body", "")))
+                  and not _looks_like_login(r.get("body", ""))
+                  and not _is_shell(r.get("body", ""), catchall))
             if ok:
                 reached.append(a["label"])
                 if _rank(a.get("role")) < _PRIV_RANK:
