@@ -634,6 +634,17 @@ def run_recon(
             if session_headers:
                 break
 
+    # still unauthenticated -> tell the operator HOW this app logs in and what to pass
+    if not session_headers:
+        try:
+            from owlforge.engine.authdetect import detect_auth_mechanism
+            _mech = detect_auth_mechanism(target, _reqfn)
+            if _mech.get('mechanism') not in (None, 'unknown'):
+                _idp = f" ({_mech['idp']})" if _mech.get('idp') else ''
+                auth_summary = f"unauth \u2014 detected {_mech['mechanism']}{_idp} login. {_mech['hint']}"
+                log(f"auth: {_mech['mechanism']}{_idp} login detected \u2014 {_mech['hint']}")
+        except Exception:
+            pass
     inv = unauth_inv
     # pass 2: authenticated (only if a session was resolved)
     if session_headers:
