@@ -326,6 +326,9 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
         from owlforge.engine.authbypass import login_authbypass_scan
         login_authbypass_scan(aid, read_blackboard(aid), sandbox_client, target,
                               session_headers, log=lambda m: emit("status", m))
+        from owlforge.engine.jwtattack import jwt_attack_scan
+        jwt_attack_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
+                        log=lambda m: emit("status", m), target=target)
         from owlforge.engine.graphqlscan import graphql_scan
         graphql_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                      log=lambda m: emit("status", m), target=target)
