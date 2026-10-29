@@ -157,6 +157,33 @@ def _http_login(form: dict, cred: dict, request_fn, log) -> dict:
     return establish_session(ctx, request_fn, log=log) or {}
 
 
+def _spa_login_probe(sandbox, target: str, cred: dict,
+                     log=lambda m: None) -> tuple[str | None, dict | None]:
+    """SPA logins are rendered client-side, so the HTTP form-finder misses them. Drive the
+    real browser against the likely login routes (agentd auto-detects the fields in the LIVE
+    DOM, which a truncated page dump can hide) and return (login_url, session_headers) for the
+    first route that yields a CONFIRMED session. (None, None) when none authenticate. Only
+    genuine login paths are tried, never the app root, so no stray input is filled."""
+    if sandbox is None or not hasattr(sandbox, "browser_login"):
+        return None, None
+    from owlforge.engine.browserlogin import browser_login_session
+    from owlforge.engine.credpage import _LOGIN_PATHS
+    base = target.rstrip("/")
+    paths: list[str] = []
+    for pth in _LOGIN_PATHS:                  # hash-routed variant first — most SPAs use it
+        for cand in ("/#" + pth, pth):
+            if cand not in paths:
+                paths.append(cand)
+    for path in paths:
+        url = base + path
+        hdrs, confirmed = browser_login_session(
+            sandbox, url, cred["user"], cred["password"], target, log=lambda m: None)
+        if hdrs and confirmed:
+            log(f"[cred] SPA login confirmed at {url}")
+            return url, hdrs
+    return None, None
+
+
 def resolve_cred_identities(creds: list[dict], target: str, sandbox, request_fn,
                             log=lambda m: None) -> list[dict]:
     """Log in each --cred pair by auto-finding the login form (no URL needed). Returns identity
@@ -166,16 +193,24 @@ def resolve_cred_identities(creds: list[dict], target: str, sandbox, request_fn,
     from owlforge.engine.browserlogin import browser_login_session
     from owlforge.engine.credpage import find_login_form
     form = find_login_form(target, request_fn, log=log)
+    primed: dict | None = None            # session already captured for creds[0] by the probe
+    if not form:
+        spa_url, primed = _spa_login_probe(sandbox, target, creds[0], log)
+        if spa_url:
+            form = {"url": spa_url, "action": None, "user_field": None, "pass_field": None}
     if not form:
         log("[cred] no login form found on the target — cannot use --cred")
         return []
     out = []
-    for c in creds:
-        hdrs, _ok = browser_login_session(
-            sandbox, form["url"], c["user"], c["password"], target,
-            user_field=form.get("user_field"), pass_field=form.get("pass_field"), log=log)
-        if not hdrs:
-            hdrs = _http_login(form, c, request_fn, log)
+    for i, c in enumerate(creds):
+        if i == 0 and primed:
+            hdrs = primed                 # reuse the probe's confirmed session (no re-login)
+        else:
+            hdrs, _ok = browser_login_session(
+                sandbox, form["url"], c["user"], c["password"], target,
+                user_field=form.get("user_field"), pass_field=form.get("pass_field"), log=log)
+            if not hdrs:
+                hdrs = _http_login(form, c, request_fn, log)
         if hdrs:
             log(f"[cred] {c['label']}: logged in as {c['user']}")
             out.append({"label": c["label"], "role": c["role"], "headers": hdrs,
