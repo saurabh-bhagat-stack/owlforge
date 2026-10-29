@@ -581,7 +581,8 @@ def run(
 
         try:
             _idents = establish_all(load_identities(identities), _estab_reqfn,
-                                    log=lambda m: console.print(rf"[dim]\[identities] {m}[/]"))
+                                    log=lambda m: console.print(rf"[dim]\[identities] {m}[/]"),
+                                    sandbox=sandbox_client)
             _sso_idents = [i for i in _idents if i.needs_sso]
             if _sso_idents and sandbox_session is not None:
                 import re as _re

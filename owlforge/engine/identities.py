@@ -56,7 +56,7 @@ def load_identities(path: str) -> list[Identity]:
 
 
 def establish_identity(identity: Identity, request_fn: RequestFn,
-                       log: Callable[[str], None] = lambda m: None) -> dict:
+                       log: Callable[[str], None] = lambda m: None, *, sandbox=None) -> dict:
     """Resolve one identity to session headers. Returns the headers (also stored on the
     identity). 'sso' marks needs_sso for the Auth Broker and returns {} for now."""
     from owlforge.engine.auth import AuthContext, establish_session
@@ -76,11 +76,32 @@ def establish_identity(identity: Identity, request_fn: RequestFn,
             headers = {k.strip(): v.strip()}
     elif kind == "login":
         params = dict(parse_qsl(a.get("data") or ""))
-        if a.get("totp_secret"):
+        has_totp = bool(a.get("totp_secret"))
+        if has_totp:
             params[a.get("totp_field") or "otp"] = totp_now(a["totp_secret"])
-        ctx = AuthContext(mode="login", login_url=a.get("url"), login_params=params,
-                          login_success=a.get("success"))
-        headers = establish_session(ctx, request_fn, log=log)
+        # Prefer a REAL browser login (SPA/JS-aware: XHR, CSRF nonce, localStorage token) —
+        # the documented `login` type used only a raw HTTP POST, which fails on modern SPA
+        # logins. Browser login cannot carry an OTP field, so keep HTTP when TOTP is set.
+        if sandbox is not None and a.get("url") and not has_totp:
+            pass_k = next((k for k in params if "pass" in k.lower()), None)
+            user_k = next((k for k in params if k != pass_k
+                           and any(x in k.lower() for x in ("user", "email", "login", "name"))), None)
+            if user_k and pass_k:
+                from urllib.parse import urlsplit
+
+                from owlforge.engine.browserlogin import browser_login_session
+                _sp = urlsplit(a["url"])
+                _tgt = f"{_sp.scheme}://{_sp.netloc}"
+                _h, _ok = browser_login_session(
+                    sandbox, a["url"], params[user_k], params[pass_k], _tgt,
+                    user_field=user_k, pass_field=pass_k, success=a.get("success"), log=log)
+                if _h:
+                    headers = _h
+                    log(f"identity '{identity.label}': logged in via the browser")
+        if not headers:
+            ctx = AuthContext(mode="login", login_url=a.get("url"), login_params=params,
+                              login_success=a.get("success"))
+            headers = establish_session(ctx, request_fn, log=log)
     elif kind == "sso":
         identity.needs_sso = True
         log(f"identity '{identity.label}': SSO — deferred to interactive capture")
@@ -130,9 +151,9 @@ def reauth_login(spec: dict, request_fn: RequestFn,
 
 
 def establish_all(identities: list[Identity], request_fn: RequestFn,
-                  log: Callable[[str], None] = lambda m: None) -> list[Identity]:
+                  log: Callable[[str], None] = lambda m: None, *, sandbox=None) -> list[Identity]:
     for ident in identities:
-        establish_identity(ident, request_fn, log=log)
+        establish_identity(ident, request_fn, log=log, sandbox=sandbox)
     return identities
 
 
