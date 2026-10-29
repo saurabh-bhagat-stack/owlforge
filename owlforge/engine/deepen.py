@@ -41,8 +41,12 @@ async def deepen_findings(*, assessment_id: str, client, sandbox, emit: Emitter,
     with session() as s:
         rows = s.exec(select(Finding).where(
             Finding.assessment_id == assessment_id, Finding.status == "validated")).all()
+        # Skip findings the deterministic extractor already proved (e.g. SQLi whose
+        # value was read out natively) — a model deepen pass adds nothing but a
+        # contradictory "no value extracted" note next to the concrete value.
         items = [(f.id, f.title, f.repro_url, f.repro_method, dict(f.repro_params or {}),
-                  f.success_signal or "") for f in rows]
+                  f.success_signal or "") for f in rows
+                 if "value-extracted" not in (f.validation_note or "")]
 
     registry = build_registry(with_sandbox=sandbox is not None)
     done = 0
