@@ -449,7 +449,7 @@ def run(
         help="Inline credentials 'user:pass' (or 'user pass'); @label / :role optional. "
              "Repeatable or comma-separated for multiple users (horizontal IDOR). owlforge "
              "finds the login form itself — no YAML needed."),
-    session: list[str] = typer.Option(  # noqa: B008
+    session_spec: list[str] = typer.Option(  # noqa: B008
         None, "--session",
         help="A ready session: a Cookie string, a 'Header: value', several joined with ' | ', "
              "or a pasted copy-as-cURL. Repeat (optional @label) for multiple identities."),
@@ -504,11 +504,27 @@ def run(
         console.print(f"[dim]\\[spec] loaded {_kind}: {len(_spec_items)} endpoint(s); "
                       f"base {_base}[/]")
         target = _base
+    # a bare host gets a scheme; loopback apps are usually plain http, everything else https
+    _LOOPBACK_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "::1"}
     if target and "://" not in target:
-        target = "https://" + target
+        _bare = target.split("/", 1)[0].rsplit("@", 1)[-1]
+        _bare_host = (_bare.rsplit(":", 1)[0] if _bare.count(":") == 1 else _bare).lower()
+        target = ("http://" if _bare_host in _LOOPBACK_HOSTS else "https://") + target
     if not target:
         console.print("[red]No target. Usage: owlforge run <target>[/]")
         raise typer.Exit(1)
+    # the scanner runs INSIDE the sandbox container, where 127.0.0.1/localhost is the
+    # container itself — a loopback target would silently scan nothing. Rewrite it to
+    # host.docker.internal (mapped to the host gateway at sandbox start) so a local app is
+    # actually reached. The displayed/scoped target becomes the rewritten one, on purpose.
+    _pu0 = urlparse(target)
+    if (_pu0.hostname or "").lower() in _LOOPBACK_HOSTS:
+        _port0 = f":{_pu0.port}" if _pu0.port else ""
+        _ui0 = _pu0.netloc.rsplit("@", 1)[0] + "@" if "@" in _pu0.netloc else ""
+        _rewritten = _pu0._replace(netloc=f"{_ui0}host.docker.internal{_port0}").geturl()
+        console.print(f"[yellow]local target — the sandbox reaches it via "
+                      f"host.docker.internal; scanning {_rewritten}[/]")
+        target = _rewritten
     init_db()
 
     # deep-by-default: everything thorough, no knobs to dumb it down
@@ -639,7 +655,7 @@ def run(
     # --- inline --session (ready headers) and --cred (auto-find login + log in) identities ---
     from owlforge.engine.authspec import parse_creds, parse_sessions, resolve_cred_identities
     _inline: list[dict] = []
-    for _sp in parse_sessions(session):
+    for _sp in parse_sessions(session_spec):
         _inline.append({"label": _sp["label"] or f"session_{len(_inline) + 1}",
                         "role": _sp["role"], "headers": _sp["headers"]})
     _creds = parse_creds(cred)
