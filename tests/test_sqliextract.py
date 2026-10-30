@@ -150,3 +150,35 @@ def test_enriches_existing_finding(tmp_path, monkeypatch):
     assert f.status == "validated" and f.confidence == "high"
     assert "PostgreSQL 14.3/app_user" in f.proof_of_concept
     assert "value-extracted" in (f.validation_note or "")
+
+
+class _MSSQL:
+    """MSSQL app, content oracle; value in system_user. length() is invalid in MSSQL (it is LEN),
+    so a length()-based probe fails and extraction must fall back to LEN() to recover the value."""
+    USER = "sa_dbo"
+
+    def http_request(self, method, url, *, params=None, body=None, headers=None, timeout_ms=30_000):
+        blob = next(iter((params or {}).values()), "") if params else (body or "")
+        return {"status": 200, "body": "x" * 80 if self._truth(blob) else "x" * 16}
+
+    def _truth(self, blob: str) -> bool:
+        if "length(" in blob:                    # invalid on MSSQL -> errors -> not "true"
+            return False
+        if "case when" not in blob and "1=1" in blob:
+            return True
+        if "case when" not in blob and "1=2" in blob:
+            return False
+        m = re.search(r"len\(\(system_user\)\)>=(\d+)", blob)
+        if m:
+            return len(self.USER) >= int(m.group(1))
+        m = re.search(r"ascii\(substring\(\(system_user\),(\d+),1\)\)>(\d+)", blob)
+        if m:
+            i, n = int(m.group(1)), int(m.group(2))
+            return i - 1 < len(self.USER) and ord(self.USER[i - 1]) > n
+        return False
+
+
+def test_extract_mssql_via_len():
+    val, how = extract_one(_MSSQL(), {"url": "http://t/x", "param": "id", "method": "GET"})
+    assert val == "sa_dbo"
+    assert "mssql_user" in how          # recovered via LEN(system_user), not length()

