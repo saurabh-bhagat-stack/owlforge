@@ -70,3 +70,46 @@ def test_returns_none_when_no_register_endpoint():
         def http_request(self, method, url, **kw):
             return {"status": 404, "body": "nf"}
     assert register_json_spa([], _Dead(), "https://t/", log=lambda m: None) is None
+
+
+class _CrapiLikeApp:
+    """Microservice app (crAPI-style): auth is behind /identity, signup needs a UNIQUE number,
+    and login lives at /identity/api/auth/login — the register path is never a root path."""
+
+    def __init__(self):
+        self.numbers = set()
+
+    def http_request(self, method, url, *, headers=None, params=None, body=None, **kw):
+        import json as _j
+        import urllib.parse as _up
+        path = _up.urlsplit(url).path
+        if method == "GET":
+            return {"status": 301, "body": ""} if path == "/identity" else {"status": 404, "body": "nf"}
+        if path == "/identity/api/auth/signup" and method == "POST":
+            d = _j.loads(body) if body else {}
+            if not (d.get("email") and d.get("password") and d.get("number")):
+                return {"status": 400, "body": "bad"}
+            if d["number"] in self.numbers:
+                return {"status": 403, "body": '{"message":"Number already registered"}'}
+            self.numbers.add(d["number"])
+            return {"status": 200, "body": '{"message":"ok"}'}       # no session on signup
+        if path == "/identity/api/auth/login" and method == "POST":
+            d = _j.loads(body) if body else {}
+            if d.get("email") and d.get("password"):
+                return {"status": 200, "body": '{"token":"ey.sessiontoken.abcdefghij"}'}
+            return {"status": 401, "body": "no"}
+        return {"status": 404, "body": "nf"}
+
+
+def test_live_prefixes_keeps_only_resolving_segments():
+    from owlforge.engine.spaseed import _live_prefixes
+    live = _live_prefixes([], _CrapiLikeApp(), "https://t")
+    assert "identity" in live
+
+
+def test_registers_on_microservice_prefixed_api(tmp_path, monkeypatch):
+    from owlforge.engine.spaseed import register_json_spa
+    ident = register_json_spa([], _CrapiLikeApp(), "https://t/", log=lambda m: None)
+    assert ident is not None
+    assert ident["login"]["url"].endswith("/identity/api/auth/signup")
+    assert "Bearer" in ident["headers"].get("Authorization", "")     # logged in via derived path

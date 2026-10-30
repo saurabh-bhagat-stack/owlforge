@@ -27,12 +27,26 @@ _API_REGISTER_PATHS = ("/api/users/basic", "/api/Users", "/api/users", "/api/use
 _OPENAPI_PATHS = ("/swagger-json", "/openapi.json", "/api-json", "/v3/api-docs", "/api-docs",
                   "/swagger.json", "/api/swagger.json", "/api-docs/swagger.json",
                   "/api/openapi.json", "/swagger/v1/swagger.json")
+# register sub-paths tried under each discovered gateway/microservice prefix (relative)
+_REG_SUBPATHS = ("api/auth/signup", "api/auth/register", "api/signup", "api/register",
+                 "api/users", "api/user", "api/v1/auth/register", "api/v1/signup",
+                 "auth/signup", "auth/register", "signup", "register", "users")
+# common microservice/gateway path segments (app-specific ones come from the crawled surface)
+_GATEWAY_SEGS = ("identity", "auth", "authentication", "user", "users", "account", "accounts",
+                 "api", "gateway", "apigateway", "core", "backend", "services", "service",
+                 "main", "app", "web", "v1", "v2")
 _REG_HINT = ("register", "signup", "sign-up", "sign_up", "/users", "/user", "create-account",
              "/join", "/accounts")
 
 
 def _marker() -> str:
     return secrets.token_hex(4)
+
+
+def _phone(marker: str) -> str:
+    """A unique 10-digit phone number derived from the marker (apps like crAPI require the
+    number to be unique, so a fixed placeholder fails every registration after the first)."""
+    return ("9" + str(int(marker, 16))).ljust(10, "0")[:10]
 
 
 def _req(sandbox, method, url, *, headers=None, body=None):
@@ -102,8 +116,8 @@ def _value_for(name, prop, spec, marker, email, password, depth=0):
         return f"owl{marker}"
     if n in ("name", "fullname", "displayname"):
         return "Owl Forge"
-    if "phone" in n or "mobile" in n:
-        return "5550000000"
+    if "phone" in n or "mobile" in n or n == "number":
+        return _phone(marker)
     if "card" in n:
         return "0000000000000000"
     if "company" in n or "organization" in n or "org" in n:
@@ -193,8 +207,20 @@ def _session_from_response(resp, target) -> dict:
     return hdrs
 
 
-def _login_new_account(sandbox, target, email, password, log) -> dict:
-    """Get a session for a just-created account: SPA browser login first, then JSON login APIs."""
+def _login_new_account(sandbox, target, email, password, log, register_url="") -> dict:
+    """Get a session for a just-created account: a login URL derived from the register URL
+    (signup->login, same gateway prefix) first, then SPA browser login, then generic JSON APIs."""
+    import re as _re
+    for a in ("signup", "sign-up", "registration", "register"):
+        if register_url and a in register_url.lower():
+            login_url = _re.sub(a, "login", register_url, count=1, flags=_re.I)
+            for uf in ("email", "user", "username"):
+                resp = _post_json(sandbox, login_url, {uf: email, "password": password})
+                if int(resp.get("status") or 0) in (200, 201):
+                    hdrs = _session_from_response(resp, target)
+                    if hdrs:
+                        return hdrs
+            break
     try:
         from owlforge.engine.authspec import _spa_login_probe
         _url, hdrs = _spa_login_probe(sandbox, target, {"user": email, "password": password},
@@ -214,6 +240,31 @@ def _login_new_account(sandbox, target, email, password, log) -> dict:
                 if hdrs:
                     return hdrs
     return {}
+
+
+def _live_prefixes(inventory, sandbox, origin) -> list[str]:
+    """Modern API apps route the auth service behind a prefix (crAPI: /identity/api/auth/signup)
+    that is not a literal in the JS. Derive candidate top-level segments from the crawled surface
+    plus a common-microservice list, keep the ones that actually resolve (not 404), so register
+    sub-paths can be tried under the real gateway prefix."""
+    segs = set(_GATEWAY_SEGS)
+    for it in inventory or []:
+        path = urlsplit(it.get("url") or "").path.strip("/")
+        if path:
+            s0 = path.split("/")[0].lower()
+            if s0.isalpha() and 2 <= len(s0) <= 24:
+                segs.add(s0)
+    live = []
+    for seg in sorted(segs):
+        try:
+            st = int(_req(sandbox, "GET", f"{origin}/{seg}").get("status") or 0)
+        except Exception:
+            st = 0
+        if st and st != 404:                       # exists (200/301/401/403/...)
+            live.append(seg)
+        if len(live) >= 8:
+            break
+    return live
 
 
 def register_json_spa(inventory, sandbox, target,
@@ -246,15 +297,19 @@ def register_json_spa(inventory, sandbox, target,
             _add(url, None)
     for p in _API_REGISTER_PATHS:                   # well-known register paths
         _add(origin + p, None)
+    for seg in _live_prefixes(inventory, sandbox, origin):   # microservice-prefixed register APIs
+        for sub in _REG_SUBPATHS:
+            _add(f"{origin}/{seg}/{sub}", None)
 
     # a generous heuristic body for endpoints with no schema
     heuristic = {"email": email, "password": password, "passwordRepeat": password,
                  "repeatPassword": password, "password_confirmation": password,
                  "username": f"owl{marker}", "user": email, "name": "Owl Forge",
                  "firstName": "Owl", "lastName": "Forge", "company": "owlforge",
-                 "securityAnswer": "owl", "phoneNumber": "5550000000"}
+                 "securityAnswer": "owl", "phoneNumber": _phone(marker),
+                 "number": _phone(marker), "phone": _phone(marker), "mobile": _phone(marker)}
 
-    for url, schema in targets[:10]:
+    for url, schema in targets[:28]:
         body = _build_object(schema, spec, marker, email, password) if schema else heuristic
         if "email" not in body and "user" not in body:
             continue
@@ -262,12 +317,12 @@ def register_json_spa(inventory, sandbox, target,
         if int(resp.get("status") or 0) not in (200, 201):
             continue
         hdrs = _session_from_response(resp, target) or _login_new_account(
-            sandbox, target, email, password, log)
+            sandbox, target, email, password, log, register_url=url)
         if hdrs:
             log(f"registered a throwaway account ({email}) via JSON API {url} and got a session")
             return {"label": "owlforge-registered", "role": "user", "headers": hdrs,
                     "login": {"url": url, "user": email, "password": password,
                               "user_field": "email", "pass_field": "password"}}
         log(f"registered ({email}) via {url} but could not establish a session")
-        return None
+        continue
     return None
