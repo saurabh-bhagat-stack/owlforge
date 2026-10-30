@@ -7,6 +7,7 @@ from datetime import UTC
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
 from sqlmodel import select
@@ -510,7 +511,7 @@ def run(
         try:
             _base, _spec_items, _kind = ingest_spec(target)
         except Exception as e:
-            console.print(f"[red]could not parse API description {target}: {e}[/]")
+            console.print(f"[red]could not parse API description {escape(str(target))}: {escape(str(e))}[/]")
             raise typer.Exit(1) from e
         if not _base:
             console.print("[red]the spec declares no server/base URL — run against the "
@@ -556,7 +557,7 @@ def run(
     try:
         client = make_client(cfg)
     except LLMError as e:
-        console.print(f"[red]{e}[/]")
+        console.print(f"[red]{escape(str(e))}[/]")
         console.print(
             f"[dim]Edit {config_path()} and set a model your local server at "
             f"{cfg.llm.base_url} actually serves, then re-run.[/]")
@@ -601,7 +602,7 @@ def run(
             cfg.sandbox.image, workspace=str(assessments_dir() / aid), log=sblog)
         sandbox_client = sandbox_session.client
     except Exception as e:
-        console.print(f"[red]sandbox start failed:[/] {e}")
+        console.print(f"[red]sandbox start failed:[/] {escape(str(e))}")
         raise typer.Exit(1) from None
 
     # --- auth: identities file (structured) + login-page harvest; creds may also be in -m ---
@@ -669,7 +670,7 @@ def run(
                            for i in _idents if (i.auth or {}).get("type") == "login"
                            and (i.auth or {}).get("url")]
         except Exception as e:
-            console.print(f"[yellow]identities load failed: {e}[/]")
+            console.print(f"[yellow]identities load failed: {escape(str(e))}[/]")
 
     # --- inline --session (ready headers) and --cred (auto-find login + log in) identities ---
     from owlforge.engine.authspec import parse_creds, parse_sessions, resolve_cred_identities
@@ -859,7 +860,7 @@ def run(
         console.print("[yellow]interrupted[/]")
     except Exception as e:
         status = "failed"
-        console.print(f"[red]scan error: {type(e).__name__}: {e}[/]")
+        console.print(f"[red]scan error: {type(e).__name__}: {escape(str(e))}[/]")
     finally:
         if sandbox_session:
             manager.stop(sandbox_session, log=sblog)
@@ -916,7 +917,7 @@ def resume(assessment_id: str) -> None:
     try:
         client = make_client(cfg)
     except LLMError as e:
-        console.print(f"[red]{e}[/]")
+        console.print(f"[red]{escape(str(e))}[/]")
         raise typer.Exit(1) from None
     sblog = lambda m: console.print(rf"[dim]\[sandbox] {m}[/]")  # noqa: E731
     if not cfg.sandbox.enabled or not manager.docker_available() \

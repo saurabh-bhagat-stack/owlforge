@@ -5,6 +5,7 @@ from __future__ import annotations
 import secrets
 
 from rich.console import Console
+from rich.markup import escape
 
 from owlforge.store.db import session
 from owlforge.store.models import Event
@@ -52,7 +53,9 @@ class Emitter:
                     self._dups = 0
                 label = type_.upper().replace("_", " ")
                 style = _STYLE.get(type_, "white")
-                self.console.print(f"[{style}]\\[{label}][/] {message}")
+                # escape the dynamic message: target/model text may contain [..] which Rich
+                # would parse as markup (a stray tag crashed whole runs)
+                self.console.print(f"[{style}]\\[{label}][/] {escape(str(message))}")
                 self._last_key = key
         if not self.persist:
             return
