@@ -242,27 +242,37 @@ def _login_new_account(sandbox, target, email, password, log, register_url="") -
     return {}
 
 
+# path segments that are never an auth gateway (static assets, health, docs) — skip them so
+# their register combos do not crowd out the real prefix under the candidate cap
+_NON_AUTH_SEGS = frozenset({"static", "images", "image", "img", "assets", "asset", "css", "js",
+    "fonts", "font", "media", "public", "health", "healthz", "healthcheck", "favicon", "robots",
+    "manifest", "sitemap", "docs", "swagger", "chatbot"})
+
+
 def _live_prefixes(inventory, sandbox, origin) -> list[str]:
     """Modern API apps route the auth service behind a prefix (crAPI: /identity/api/auth/signup)
-    that is not a literal in the JS. Derive candidate top-level segments from the crawled surface
-    plus a common-microservice list, keep the ones that actually resolve (not 404), so register
-    sub-paths can be tried under the real gateway prefix."""
-    segs = set(_GATEWAY_SEGS)
+    that is not a literal in the JS. Probe candidate top-level segments — the common-microservice
+    list FIRST (auth-relevant, so /identity is tried before noisy ones), then crawled-surface
+    segments — and keep the ones that resolve. Priority order matters: register sub-paths are
+    generated per prefix, so an auth prefix must come before health/static/etc."""
+    ordered: list[str] = list(_GATEWAY_SEGS)
     for it in inventory or []:
         path = urlsplit(it.get("url") or "").path.strip("/")
         if path:
             s0 = path.split("/")[0].lower()
-            if s0.isalpha() and 2 <= len(s0) <= 24:
-                segs.add(s0)
+            if s0.isalpha() and 2 <= len(s0) <= 24 and s0 not in ordered:
+                ordered.append(s0)
     live = []
-    for seg in sorted(segs):
+    for seg in ordered:
+        if seg in _NON_AUTH_SEGS:
+            continue
         try:
             st = int(_req(sandbox, "GET", f"{origin}/{seg}").get("status") or 0)
         except Exception:
             st = 0
         if st and st != 404:                       # exists (200/301/401/403/...)
             live.append(seg)
-        if len(live) >= 8:
+        if len(live) >= 10:
             break
     return live
 
@@ -309,7 +319,7 @@ def register_json_spa(inventory, sandbox, target,
                  "securityAnswer": "owl", "phoneNumber": _phone(marker),
                  "number": _phone(marker), "phone": _phone(marker), "mobile": _phone(marker)}
 
-    for url, schema in targets[:28]:
+    for url, schema in targets[:48]:
         body = _build_object(schema, spec, marker, email, password) if schema else heuristic
         if "email" not in body and "user" not in body:
             continue

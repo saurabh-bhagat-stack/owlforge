@@ -84,7 +84,10 @@ class _CrapiLikeApp:
         import urllib.parse as _up
         path = _up.urlsplit(url).path
         if method == "GET":
-            return {"status": 301, "body": ""} if path == "/identity" else {"status": 404, "body": "nf"}
+            # identity is the auth gateway; these noise segments also resolve (like real crAPI)
+            if path in ("/identity", "/static", "/images", "/health", "/chatbot"):
+                return {"status": 301, "body": ""}
+            return {"status": 404, "body": "nf"}
         if path == "/identity/api/auth/signup" and method == "POST":
             d = _j.loads(body) if body else {}
             if not (d.get("email") and d.get("password") and d.get("number")):
@@ -109,7 +112,9 @@ def test_live_prefixes_keeps_only_resolving_segments():
 
 def test_registers_on_microservice_prefixed_api(tmp_path, monkeypatch):
     from owlforge.engine.spaseed import register_json_spa
-    ident = register_json_spa([], _CrapiLikeApp(), "https://t/", log=lambda m: None)
+    noisy_inv = [{"url": f"https://t/{seg}/x", "method": "GET", "params": [], "source": "katana"}
+                 for seg in ("static", "images", "health", "chatbot")]
+    ident = register_json_spa(noisy_inv, _CrapiLikeApp(), "https://t/", log=lambda m: None)
     assert ident is not None
     assert ident["login"]["url"].endswith("/identity/api/auth/signup")
     assert "Bearer" in ident["headers"].get("Authorization", "")     # logged in via derived path
