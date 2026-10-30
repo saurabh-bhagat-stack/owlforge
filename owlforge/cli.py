@@ -72,6 +72,20 @@ def _maybe_update_image(image: str, *, pull: bool, no_pull: bool, interactive: b
         console.print(r"[dim]\[sandbox] using the current image[/]")
 
 
+def _auth_state_message(session_headers, identity_set) -> tuple[int, str]:
+    """Make the authenticated/unauthenticated state LOUD at the auth boundary, so a degraded run
+    (self-registration or login failed -> no session) is never mistaken for 'the app is clean'."""
+    authed = [i for i in (identity_set or [])
+              if i.get("headers") and i.get("role") not in ("anonymous", "anon")]
+    n = len(authed) or (1 if session_headers else 0)
+    if n:
+        return n, f"auth: operating with {n} authenticated identit{'y' if n == 1 else 'ies'}"
+    return 0, ("auth: NO authenticated session established — running UNAUTHENTICATED. Authenticated "
+               "classes (access-control, BOLA, authed API surface) are skipped. If this app needs a "
+               "login, re-run with --cred user:pass (a failed signup/login often means the service "
+               "is down).")
+
+
 def _meets_fail_threshold(validated_severities, fail_on) -> bool | None:
     """True if any validated severity is at/above fail_on; None if fail_on is
     unset or unknown (caller treats None as 'do not gate')."""
@@ -837,6 +851,9 @@ def run(
                                   identity_set, log=_slog)
         except Exception as e:
             emit("log", f"seed step skipped: {type(e).__name__}: {e}")
+
+        _authed_n, _authed_msg = _auth_state_message(session_headers, identity_set)
+        emit("status" if _authed_n else "error", _authed_msg)
 
         import re as _re
         _tm = _re.search(r"tech=([^;\n]+)", surface_text or "")
