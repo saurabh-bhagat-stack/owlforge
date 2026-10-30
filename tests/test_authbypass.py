@@ -76,3 +76,56 @@ def test_no_finding_when_login_is_safe(tmp_path, monkeypatch):
     n = login_authbypass_scan("a", [], _JuiceLike(vulnerable=False), "https://t/", {})
     assert n == 0
     assert _findings(db) == []
+
+
+class _HeaderGatedApp:
+    """GET /login hides X-Dev-Access in a ROT13 comment; POST /login authenticates ONLY when
+    both the X-Dev-Access: yes header AND a NoSQL operator payload are present (Crack-the-Gate)."""
+
+    def http_request(self, method, url, *, headers=None, params=None, body=None, **kw):
+        import codecs
+        import urllib.parse as _up
+        if _up.urlsplit(url).path == "/login" and method == "GET":
+            rot = codecs.encode("X-Dev-Access: yes", "rot_13")
+            return {"status": 200, "body": f"<html><!-- note: {rot} --></html>"}
+        if _up.urlsplit(url).path == "/login" and method == "POST":
+            h = {k.lower(): v for k, v in (headers or {}).items()}
+            dev = str(h.get("x-dev-access", "")).lower() == "yes"
+            nosql = bool(body) and "$ne" in body
+            if dev and nosql:
+                return {"status": 200, "body": '{"token":"ey.sessiontoken.abcdefghij"}'}
+            return {"status": 401, "body": '{"error":"User not found"}'}
+        return {"status": 404, "body": "nf"}
+
+
+class _PureBackdoorApp:
+    """POST /login authenticates on the X-Backdoor: 1 header alone, no credentials."""
+
+    def http_request(self, method, url, *, headers=None, params=None, body=None, **kw):
+        import urllib.parse as _up
+        if _up.urlsplit(url).path == "/login" and method == "GET":
+            return {"status": 200, "body": "<html><!-- use X-Backdoor to get in --></html>"}
+        if _up.urlsplit(url).path == "/login" and method == "POST":
+            if str({k.lower(): v for k, v in (headers or {}).items()}.get("x-backdoor", "")) == "1":
+                return {"status": 200, "body": '{"token":"ey.sessiontoken.abcdefghij"}'}
+            return {"status": 401, "body": '{"error":"nope"}'}
+        return {"status": 404, "body": "nf"}
+
+
+_INV_LOGIN = [{"url": "https://t/login", "method": "POST", "params": []}]
+
+
+def test_header_gated_nosql_bypass_confirmed(tmp_path, monkeypatch):
+    db = _db(tmp_path, monkeypatch)
+    n = login_authbypass_scan("a", _INV_LOGIN, _HeaderGatedApp(), "https://t/", {})
+    assert n == 1
+    f = _findings(db)
+    assert len(f) == 1 and f[0].severity == "critical"
+    assert "header" in f[0].title.lower()  # header-gated kind in the title
+
+
+def test_pure_backdoor_header_confirmed(tmp_path, monkeypatch):
+    db = _db(tmp_path, monkeypatch)
+    n = login_authbypass_scan("a", _INV_LOGIN, _PureBackdoorApp(), "https://t/", {})
+    assert n == 1
+    assert "backdoor header" in _findings(db)[0].title.lower()

