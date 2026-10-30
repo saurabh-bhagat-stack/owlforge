@@ -229,6 +229,16 @@ class _Server(ThreadingHTTPServer):
         super().__init__(addr, _Handler)
         self.console = console
 
+    def handle_error(self, request, client_address):
+        # a browser closing an SSE stream resets the socket; that is normal, not an error worth
+        # dumping a traceback into the scan output.
+        import sys
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError, ConnectionAbortedError,
+                            TimeoutError, OSError)):
+            return
+        super().handle_error(request, client_address)
+
 
 class WebConsole:
     def __init__(self, assessment_id: str, target: str, model: str, port: int = 0,
