@@ -203,6 +203,7 @@ class ScanApp(App):
         Binding("s", "sort", "Sort", show=False),
         Binding("v", "sev", "Severity", show=False),
         Binding("slash", "filter", "Filter", show=False),
+        Binding("h", "hygiene", "Hygiene", show=False),
         Binding("l", "rawlog", "Raw log", show=False),
     ]
 
@@ -222,6 +223,7 @@ class ScanApp(App):
         self._filter = ""
         self._min_sev = -1
         self._sort_key = "sev"
+        self._show_hygiene = False
         self._table_sig = None
         self._surface_sig = None
         self._steer: list[str] = []
@@ -365,8 +367,26 @@ class ScanApp(App):
         except Exception:
             return []
 
+    def _group_hygiene(self, rows: list[dict]) -> list[dict]:
+        """Collapse passive hygiene findings (missing headers/cookies/version) into ONE row so real
+        findings aren't buried; press `h` to expand. Mirrors the stream's hygiene folding."""
+        if self._show_hygiene:
+            return rows
+        hyg = [f for f in rows if _narr.is_hygiene(f["title"])]
+        if not hyg:
+            return rows
+        real = [f for f in rows if not _narr.is_hygiene(f["title"])]
+        real.append({"id": "__hygiene__", "severity": "info", "status": "candidate",
+                     "title": f"Security hygiene ({len(hyg)}) — headers/cookies/version — press h",
+                     "endpoint": "", "method": None, "confidence": "info",
+                     "technical_analysis": "Grouped passive findings:\n- "
+                     + "\n- ".join(f["title"] for f in hyg[:30]),
+                     "proof_of_concept": "", "impact": "", "remediation": "",
+                     "validation_note": "passive hygiene — grouped", "evidence": []})
+        return real
+
     def _refresh(self) -> None:
-        rows = self._apply_view(self._findings())
+        rows = self._group_hygiene(self._apply_view(self._findings()))
         self._row_cache = {f["id"]: f for f in rows}
         sig = (self._filter, self._min_sev, self._sort_key, tuple((f["id"], f["status"]) for f in rows))
         if sig != self._table_sig:
@@ -482,6 +502,11 @@ class ScanApp(App):
     def action_rawlog(self) -> None:
         self.push_screen(RawLogScreen(list(self._raw)))
 
+    def action_hygiene(self) -> None:
+        self._show_hygiene = not self._show_hygiene
+        self._table_sig = None
+        self._refresh()
+
     def action_open(self) -> None:
         dt = self.query_one("#findings", DataTable)
         if dt.row_count == 0:
@@ -490,11 +515,17 @@ class ScanApp(App):
             key = dt.coordinate_to_cell_key(dt.cursor_coordinate).row_key.value
         except Exception:
             return
+        if key == "__hygiene__":
+            self.action_hygiene()
+            return
         f = getattr(self, "_row_cache", {}).get(key)
         if f:
             self.push_screen(FindingDetail(f))
 
     def on_data_table_row_selected(self, event) -> None:
+        if event.row_key.value == "__hygiene__":
+            self.action_hygiene()
+            return
         f = getattr(self, "_row_cache", {}).get(event.row_key.value)
         if f:
             self.push_screen(FindingDetail(f))
