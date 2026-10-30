@@ -507,6 +507,9 @@ def run(
         False, "--pull", help="Pull the latest sandbox image before scanning."),
     no_pull: bool = typer.Option(
         False, "--no-pull", help="Skip the sandbox-image freshness check entirely."),
+    web: bool = typer.Option(
+        False, "--web", help="Open a live web console (localhost) with a copyable, filterable "
+                             "timeline + findings, instead of the full-screen TUI."),
 ) -> None:
     """Run a deep assessment against TARGET. Thorough by default — recon, interactive SPA
     mapping, pre-probe, specialists, validation, and reporting all run automatically."""
@@ -763,6 +766,18 @@ def run(
     console.print(Panel.fit(chr(10).join(panel), title="assessment started", border_style="cyan"))
 
     _use_tui = dashboard_ui and console.is_terminal and not non_interactive
+    _web = None
+    if web:
+        _use_tui = False
+        try:
+            from owlforge.engine.webui import WebConsole
+            _web = WebConsole(aid, target, cfg.llm.model)
+            console.print(f"[bold green]web console:[/] {_web.url()}  "
+                          "[dim](open in a browser — live, copyable, filterable)[/]")
+        except Exception as e:
+            console.print(f"[yellow]web console failed to start ({type(e).__name__}); "
+                          "falling back to the stream[/]")
+            _web = None
 
     def _checkpoint(keys):
         with session() as _s:
@@ -873,7 +888,7 @@ def run(
             from owlforge.engine.tui import run_scan_tui
             status, summary, report_path = run_scan_tui(aid, target, cfg.llm.model, _full)
         else:
-            emit = Emitter(aid, console=console)
+            emit = Emitter(aid, console=console, web=_web)
             summary, report_path = _full(emit)
     except KeyboardInterrupt:
         status = "stopped"
@@ -882,6 +897,11 @@ def run(
         status = "failed"
         console.print(f"[red]scan error: {type(e).__name__}: {escape(str(e))}[/]")
     finally:
+        if _web is not None:
+            try:
+                _web.stop()
+            except Exception:
+                pass
         if sandbox_session:
             manager.stop(sandbox_session, log=sblog)
 

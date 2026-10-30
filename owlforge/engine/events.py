@@ -20,12 +20,13 @@ from owlforge.store.models import Event
 
 class Emitter:
     def __init__(self, assessment_id: str, console: Console | None = None, persist: bool = True,
-                 quiet: bool = False, dashboard=None) -> None:
+                 quiet: bool = False, dashboard=None, web=None) -> None:
         self.assessment_id = assessment_id
         self.console = console or Console()
         self.persist = persist
         self.quiet = quiet
         self.dashboard = dashboard
+        self.web = web
         self._last_key: tuple[str, str] | None = None
         self._dups = 0
         self._hygiene = 0
@@ -74,6 +75,12 @@ class Emitter:
         if self._transcript is not None and line is not None:
             try:
                 self._transcript.write(line, narrator.phase_of(message))
+            except Exception:
+                pass
+
+        if self.web is not None and line is not None:
+            try:
+                self.web.push(type_, message, line)
             except Exception:
                 pass
 
