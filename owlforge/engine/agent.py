@@ -174,6 +174,10 @@ async def run_single_agent(
                     "proves it, e.g. \"status 500 on category=' while category='' returns 200\"). "
                     "If on reflection nothing is actually confirmed, call `finish` again.")))
                 continue
+            if (findings_created == 0 and finding_nudge_sent
+                    and _claims_unfiled_vuln(notes, last_summary)):
+                _auto_capture_finding(client, assessment_id, target, last_summary, notes,
+                                      actions, emit)
             emit("status", "assessment finished by agent")
             return _finalize(last_summary, notes, actions, emit)
 
@@ -254,3 +258,65 @@ def _finalize(summary: str, notes: list[str], actions: list[str], emit: Emitter)
     summary = summary or "No summary produced (the agent took no actions)."
     emit("finish", summary[:2000])
     return summary
+
+
+def _auto_capture_finding(client, assessment_id: str, target: str, summary: str,
+                          notes: list[str], actions: list[str], emit: Emitter) -> bool:
+    """Last resort when a specialist CONFIRMED a vuln in its summary but never filed it (ran out
+    of turns / ignored the nudge). Extract a structured finding via one model call and file it as
+    a CANDIDATE — the evidence gate re-tests every candidate, so a hallucinated extraction is
+    rejected, making this safe. Returns True if a finding was filed."""
+    import json
+    import secrets as _secrets
+
+    from owlforge.llm.base import Message
+    ctx = ((summary or "") + "\n\nNotes:\n" + "\n".join(n for n in notes[-10:] if n)
+           + "\n\nActions:\n" + "\n".join(actions[-15:]))
+    sys = (f"A security specialist examined {target}. Its summary and notes below describe a "
+           "CONFIRMED vulnerability that was never filed. Output ONLY a compact JSON object for the "
+           "single strongest CONCRETELY-confirmed finding: {\"title\":..., "
+           "\"severity\":\"critical|high|medium|low\", \"endpoint\":<url>, "
+           "\"proof_of_concept\":<how it was proven, with the exact payload/observation>, "
+           "\"repro_method\":\"GET|POST\", \"repro_url\":<url>, "
+           "\"repro_params\":{<param>:<exact raw payload>}, "
+           "\"success_signal\":<text present ONLY when vulnerable>}. If nothing is actually, "
+           "concretely confirmed (only attempts / negatives), output {}. Never invent evidence.")
+    try:
+        turn = client.chat([Message(role="system", content=sys),
+                            Message(role="user", content=ctx[:6000])],
+                           [], temperature=0, max_tokens=400)
+        m = re.search(r"\{.*\}", turn.content or "", re.S)
+        data = json.loads(m.group(0)) if m else {}
+    except Exception:
+        return False
+    if not isinstance(data, dict) or not data.get("title"):
+        return False
+    endpoint = data.get("endpoint") or data.get("repro_url")
+    if not endpoint:
+        return False
+    from owlforge.store.db import session
+    from owlforge.store.models import Finding
+    sev = str(data.get("severity", "medium")).lower()
+    sev = sev if sev in ("critical", "high", "medium", "low", "info") else "medium"
+    params = data.get("repro_params") if isinstance(data.get("repro_params"), dict) else {}
+    try:
+        with session() as s:
+            s.add(Finding(
+                id=f"find_{_secrets.token_hex(5)}", assessment_id=assessment_id,
+                title=str(data["title"])[:200], severity=sev, status="candidate",
+                confidence="medium", endpoint=str(endpoint)[:500],
+                method=str(data.get("repro_method") or "GET").upper(),
+                technical_analysis=str(data.get("proof_of_concept", ""))[:1500],
+                proof_of_concept=str(data.get("proof_of_concept", ""))[:1500],
+                repro_url=str(data.get("repro_url") or endpoint)[:500],
+                repro_method=str(data.get("repro_method") or "GET").upper(),
+                repro_params=params,
+                success_signal=str(data.get("success_signal", ""))[:200],
+                validation_note="auto-captured from the specialist's summary (it was described but "
+                                "never filed); pending validation"))
+            s.commit()
+    except Exception as e:
+        emit("log", f"auto-capture file failed: {type(e).__name__}: {e}")
+        return False
+    emit("status", "auto-captured a finding the specialist described but did not file")
+    return True
