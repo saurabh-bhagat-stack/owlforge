@@ -36,6 +36,7 @@ dependencies = [
     "httpx>=0.27",
     "platformdirs>=4.2",
     "textual>=0.60",
+    "cryptography>=43.0",  # JWT RS256/x5c forging + JWK<->PEM for alg-confusion
 ]
 
 [project.urls]

