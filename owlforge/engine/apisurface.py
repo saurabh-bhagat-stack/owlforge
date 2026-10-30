@@ -134,6 +134,9 @@ def discover_api_endpoints(assessment_id, inventory, sandbox, target, session_he
         added = persist_new(assessment_id, found, cap=400)
     except Exception:
         added = 0
-    if added:
-        log(f"api-surface: recovered {added} authenticated API endpoint(s) from the JS bundle")
+    log(f"api-surface: {len(literals)} API literal(s) in JS, {len(prefixes)} live prefix(es), "
+        f"probed {probes} -> recovered {added} authenticated endpoint(s)")
+    if literals and not added and session_headers:
+        log("api-surface: grepped API paths but recovered 0 with the session — possible transient "
+            "sandbox error or wrong prefixes; authed object endpoints may be missing")
     return added

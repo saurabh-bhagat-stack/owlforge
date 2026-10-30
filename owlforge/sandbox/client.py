@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 import httpx
@@ -26,6 +27,25 @@ class SandboxClient:
     def _headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self.token}"} if self.token else {}
 
+    # connection-level failures to the LOCAL agentd mean the request never reached it (so the
+    # sandboxed action never happened) — a transient blip under load. Retrying is safe and keeps a
+    # momentary hiccup from collapsing a whole authenticated assessment into "target unreachable".
+    _TRANSIENT = (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout,
+                  httpx.ReadError, httpx.RemoteProtocolError)
+
+    def _post(self, path: str, payload: dict, timeout: float, retries: int = 3) -> dict:
+        last: Exception | None = None
+        for i in range(retries):
+            try:
+                r = httpx.post(f"{self.base_url}{path}", headers=self._headers(), json=payload,
+                               timeout=timeout)
+                r.raise_for_status()
+                return r.json()
+            except self._TRANSIENT as e:
+                last = e
+                time.sleep(0.5 * (i + 1))        # brief backoff; the agentd is local, blips clear fast
+        raise last if last else RuntimeError(f"POST {path} failed")
+
     def health(self) -> bool:
         try:
             r = httpx.get(f"{self.base_url}/health", timeout=5.0)
@@ -36,14 +56,12 @@ class SandboxClient:
     def exec(
         self, command: str, *, workdir: str | None = None, timeout_ms: int = 60_000, bypass_proxy: bool = False
     ) -> ExecResult:
-        r = httpx.post(
-            f"{self.base_url}/exec",
-            headers=self._headers(),
-            json={"command": command, "workdir": workdir, "timeout_ms": timeout_ms, "bypass_proxy": bypass_proxy},
+        d = self._post(
+            "/exec",
+            {"command": command, "workdir": workdir, "timeout_ms": timeout_ms,
+             "bypass_proxy": bypass_proxy},
             timeout=max(self.timeout, timeout_ms / 1000 + 10),
         )
-        r.raise_for_status()
-        d = r.json()
         return ExecResult(
             exit_code=d["exit_code"], stdout=d["stdout"], stderr=d["stderr"],
             duration_ms=d["duration_ms"], timed_out=d.get("timed_out", False),
@@ -65,25 +83,19 @@ class SandboxClient:
 
     def http_request(self, method, url, *, headers=None, params=None, body=None,
                      follow_redirects: bool = True, timeout_ms: int = 30_000) -> dict:
-        r = httpx.post(
-            f"{self.base_url}/http",
-            headers=self._headers(),
-            json={"method": method, "url": url, "headers": headers, "params": params,
-                  "body": body, "follow_redirects": follow_redirects, "timeout_ms": timeout_ms},
+        return self._post(
+            "/http",
+            {"method": method, "url": url, "headers": headers, "params": params,
+             "body": body, "follow_redirects": follow_redirects, "timeout_ms": timeout_ms},
             timeout=max(self.timeout, timeout_ms / 1000 + 10),
         )
-        r.raise_for_status()
-        return r.json()
 
     def render(self, url: str, *, headers: dict | None = None, timeout_ms: int = 30_000) -> dict:
-        r = httpx.post(
-            f"{self.base_url}/render",
-            headers=self._headers(),
-            json={"url": url, "headers": headers, "timeout_ms": timeout_ms},
+        return self._post(
+            "/render",
+            {"url": url, "headers": headers, "timeout_ms": timeout_ms},
             timeout=max(self.timeout, timeout_ms / 1000 + 20),
         )
-        r.raise_for_status()
-        return r.json()
 
     def map(self, url: str, *, headers: dict | None = None, max_pages: int = 12,
             max_clicks: int = 10, timeout_ms: int = 20_000) -> dict:
