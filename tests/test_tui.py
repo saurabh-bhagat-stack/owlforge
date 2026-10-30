@@ -32,7 +32,7 @@ def test_emitter_suppresses_consecutive_duplicates():
     em("status", "recon: crawled 7 page(s)")
     em("status", "next step")
     text = buf.getvalue()
-    assert text.count("recon: crawled 7 page(s)") == 1      # printed once, not 3x
+    assert text.count("crawled the site") == 1              # narrated once, not 3x
     assert "repeated x2 more" in text                        # with a collapse notice
     assert "next step" in text
 

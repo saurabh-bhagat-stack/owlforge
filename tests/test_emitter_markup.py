@@ -1,6 +1,6 @@
 """Regression: the console Emitter must not choke on target/model text that contains square
-brackets (Rich markup). A stray '[/conf_password]' in a status line once crashed whole runs and
-masked the real error."""
+brackets (Rich markup). A stray '[/conf_password]' once crashed whole runs and masked the real
+error. (The stream now renders through the narrator, so assertions check the narrated output.)"""
 from __future__ import annotations
 
 import io
@@ -20,16 +20,15 @@ def _emit_to_string(type_, message):
 
 def test_bracketed_message_does_not_crash():
     out = _emit_to_string("status", "surface params: [/conf_password] and [red]x[/]")
-    assert "conf_password" in out
-    assert "STATUS" in out
+    assert "conf_password" in out        # rendered literally, not parsed as markup
 
 
 def test_unbalanced_markup_tag_is_safe():
-    # the exact shape that crashed: a lone closing tag
-    out = _emit_to_string("log", "payload rejected: [/conf_password]")
+    # the exact shape that crashed, on a narrated event type (error)
+    out = _emit_to_string("error", "payload rejected: [/conf_password]")
     assert "conf_password" in out
 
 
 def test_normal_message_still_renders():
     out = _emit_to_string("status", "recon: crawled 3 pages")
-    assert "recon: crawled 3 pages" in out
+    assert "crawled the site" in out     # narrated form of the raw status

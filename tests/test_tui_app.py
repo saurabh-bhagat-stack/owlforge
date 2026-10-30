@@ -32,11 +32,12 @@ def test_tui_populates_tracks_phase_and_opens_detail(tmp_path, monkeypatch):
         app = ScanApp("a", "https://t", "modelX", scan_fn=lambda emit, steer=None: ("summary", None))
         async with app.run_test() as pilot:
             app.on_scan_event("status", "orchestrator: 10 items -> 20 tasks")
+            phase_at_event = app._phase          # capture before an instant scan_fn can race to "complete"
             app._refresh()
             await pilot.pause()
             dt = app.query_one("#findings", DataTable)
             assert dt.row_count >= 1
-            assert app._phase == "hunt"
+            assert phase_at_event == "hunt"
             # open the detail screen for the seeded finding
             app.push_screen(FindingDetail(app._row_cache["f1"]))
             await pilot.pause()
