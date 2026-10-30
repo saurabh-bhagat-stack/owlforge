@@ -345,6 +345,9 @@ def _run_hunt(aid, *, target, message, cfg, client, sandbox_client, session_head
         from owlforge.engine.accesscontrol import access_control_scan
         access_control_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                             identity_set, log=lambda m: emit("status", m))
+        from owlforge.engine.bola import bola_scan
+        bola_scan(aid, read_blackboard(aid), sandbox_client, identity_set,
+                  log=lambda m: emit("status", m), target=target)
         from owlforge.engine.rolematrix import capability_matrix_scan
         capability_matrix_scan(aid, read_blackboard(aid), sandbox_client, session_headers,
                                identity_set, log=lambda m: emit("status", m))
