@@ -775,6 +775,8 @@ class OastStartRequest(BaseModel):
     token: str = ""
     ngrok_token: str = ""
     port: int = 48080
+    serve_path: str = ""           # tunnel: serve serve_body at this path (e.g. /jwks.json for jku)
+    serve_body: str = ""
 
 
 @app.post("/oast/start", dependencies=[Depends(auth)])
@@ -871,12 +873,32 @@ def oast_start(req: OastStartRequest) -> dict:
                 os.remove(f)
             except Exception:
                 pass
+        serve_file = os.path.join(ws, "oast_serve.body")
+        serve_path = req.serve_path or ""
+        if serve_path and req.serve_body:
+            try:
+                with open(serve_file, "w") as jf:
+                    jf.write(req.serve_body)
+            except Exception:
+                serve_path = ""
         with open(listener, "w") as fh:
             fh.write(
                 "import http.server\n"
+                f"HITS={hits!r}\n"
+                f"SERVE_PATH={serve_path!r}\n"
+                f"SERVE_FILE={serve_file!r}\n"
                 "class H(http.server.BaseHTTPRequestHandler):\n"
                 " def _l(self):\n"
-                f"  open({hits!r},'a').write(self.path+chr(10))\n"
+                "  open(HITS,'a').write(self.path+chr(10))\n"
+                "  if SERVE_PATH and self.path.split('?')[0]==SERVE_PATH:\n"
+                "   try:\n"
+                "    b=open(SERVE_FILE,'rb').read()\n"
+                "   except Exception:\n"
+                "    b=b'{}'\n"
+                "   self.send_response(200)\n"
+                "   self.send_header('Content-Type','application/json')\n"
+                "   self.send_header('Content-Length',str(len(b)))\n"
+                "   self.end_headers(); self.wfile.write(b); return\n"
                 "  self.send_response(200); self.end_headers(); self.wfile.write(b'ok')\n"
                 " do_GET=_l; do_POST=_l; do_HEAD=_l\n"
                 " def log_message(self,*a): pass\n"

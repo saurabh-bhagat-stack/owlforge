@@ -111,11 +111,13 @@ class SandboxClient:
         return r.json()
 
     def oast_start(self, provider: str = "interactsh", *, server: str = "", token: str = "",
-                   ngrok_token: str = "") -> dict:
-        """Start a persistent OAST provider (interactsh or tunnel) as a managed subprocess."""
+                   ngrok_token: str = "", serve_path: str = "", serve_body: str = "") -> dict:
+        """Start a persistent OAST provider (interactsh or tunnel) as a managed subprocess.
+        For a tunnel, serve_body is served at serve_path (used to host a JWKS for jku attacks)."""
         r = httpx.post(f"{self.base_url}/oast/start", headers=self._headers(),
                        json={"provider": provider, "server": server, "token": token,
-                             "ngrok_token": ngrok_token}, timeout=max(self.timeout, 60))
+                             "ngrok_token": ngrok_token, "serve_path": serve_path,
+                             "serve_body": serve_body}, timeout=max(self.timeout, 60))
         r.raise_for_status()
         return r.json()
 
