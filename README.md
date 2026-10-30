@@ -15,7 +15,7 @@ assessment — recon → understanding → authentication → planning → multi
 evidence-gated validation → report — with all tooling running inside an isolated sandbox
 container you build yourself.
 
-> ⚠️ **Status: beta (public testing phase).** The engine works end to end on real targets
+> ⚠️ **Status: beta (testing phase).** The engine works end to end on real targets
 > and is being validated across different kinds of applications; some areas are still in
 > progress (see [Roadmap](#roadmap)) and interfaces/schema may change. Findings and
 > recall will keep improving as testing broadens. **Only test systems you are authorized
