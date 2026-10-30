@@ -129,3 +129,28 @@ def test_pure_backdoor_header_confirmed(tmp_path, monkeypatch):
     n = login_authbypass_scan("a", _INV_LOGIN, _PureBackdoorApp(), "https://t/", {})
     assert n == 1
     assert "backdoor header" in _findings(db)[0].title.lower()
+
+
+class _KnownUserApp:
+    """Password bypass: the REAL user (victim@site.com) + a non-string password operator ($ne)
+    authenticates; a wrong email fails even with the operator, and a generic injection fails."""
+    USER = "victim@site.com"
+
+    def http_request(self, method, url, *, headers=None, params=None, body=None, **kw):
+        import json as _j
+        import urllib.parse as _up
+        if _up.urlsplit(url).path == "/login" and method == "POST":
+            d = _j.loads(body) if body else {}
+            if d.get("email") == self.USER and isinstance(d.get("password"), dict):
+                return {"status": 200, "body": '{"token":"ey.sessiontoken.abcdefghij"}'}
+            return {"status": 401, "body": '{"error":"invalid"}'}
+        return {"status": 404, "body": "nf"}
+
+
+def test_known_user_password_bypass(tmp_path, monkeypatch):
+    db = _db(tmp_path, monkeypatch)
+    n = login_authbypass_scan("a", [{"url": "https://t/login", "method": "POST", "params": []}],
+                              _KnownUserApp(), "https://t/", {},
+                              message="the login email is victim@site.com, password unknown")
+    assert n == 1
+    assert "known-user" in _findings(db)[0].title.lower()

